@@ -3,21 +3,12 @@ import { ref, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/composables/useAuth'
-import type { TacitEvent } from '@/types/database'
 
 const router = useRouter()
 const { user, profile } = useAuth()
 
 const currentStep = ref(1)
 const totalSteps = 5 // 总是 5 步，第三步内容根据 isDecideLater 动态变化
-
-// 获取实际的步骤编号（用于显示）
-const getDisplayStep = (step: number) => {
-  if (!isDecideLater.value && step >= 3) {
-    return step + 1 // 跳过第三步，后面的步骤编号+1
-  }
-  return step
-}
 
 // Step 1: Basic Info (填空句式)
 const eventTitle = ref('')
@@ -469,7 +460,7 @@ const createEvent = async () => {
                   </label>
                   <div v-if="modules.giftRegistry.enabled" class="space-y-3">
                     <div
-                      v-for="(item, index) in modules.giftRegistry.items"
+                      v-for="(_, index) in modules.giftRegistry.items"
                       :key="index"
                       class="flex gap-2"
                     >
@@ -660,9 +651,56 @@ const createEvent = async () => {
                 <div class="space-y-4">
                   <div v-if="!isDecideLater && eventDate" class="text-center">
                     <p class="font-bold">{{ new Date(eventDate).toLocaleDateString() }}</p>
+                    <p v-if="startTime && endTime" class="text-sm opacity-80">
+                      {{ startTime }} - {{ endTime }}
+                    </p>
                   </div>
-                  <div v-if="locationName" class="text-center">
+                  <div v-if="isDecideLater" class="text-center">
+                    <p class="text-sm opacity-80 italic">Date to be decided</p>
+                  </div>
+                  
+                  <div v-if="locationName" class="text-center border-t pt-4">
                     <p class="font-semibold">📍 {{ locationName }}</p>
+                    <p v-if="locationAddress && !useSecretAddress" class="text-xs opacity-70 mt-1">
+                      {{ locationAddress }}
+                    </p>
+                    <p v-else-if="useSecretAddress" class="text-xs opacity-70 mt-1 italic">
+                      Address visible to RSVP'd guests
+                    </p>
+                  </div>
+
+                  <!-- Modules Preview -->
+                  <div class="space-y-3 mt-4 border-t pt-4">
+                    <!-- Spotify -->
+                    <div v-if="modules.spotify.enabled && modules.spotify.url" class="text-center">
+                      <p class="text-xs font-bold mb-1">🎵 Spotify</p>
+                      <p class="text-xs opacity-70 truncate">{{ modules.spotify.url }}</p>
+                    </div>
+
+                    <!-- Gift Registry -->
+                    <div v-if="modules.giftRegistry.enabled && modules.giftRegistry.items.length > 0" class="text-center">
+                      <p class="text-xs font-bold mb-1">🎁 Gift Registry</p>
+                      <p class="text-xs opacity-70">{{ modules.giftRegistry.items.length }} item(s)</p>
+                    </div>
+
+                    <!-- Dress Code -->
+                    <div v-if="modules.dressCode.enabled && modules.dressCode.text" class="text-center">
+                      <p class="text-xs font-bold mb-1">👔 Dress Code</p>
+                      <p class="text-xs opacity-70">{{ modules.dressCode.text }}</p>
+                    </div>
+
+                    <!-- Chip In -->
+                    <div v-if="modules.chipIn.enabled" class="text-center border-t pt-3">
+                      <p class="text-xs font-bold mb-1">💰 Chip In</p>
+                      <p class="text-sm font-bold">
+                        {{ modules.chipIn.currency }} {{ modules.chipIn.amount }}/person
+                      </p>
+                    </div>
+                  </div>
+
+                  <!-- Theme Preview -->
+                  <div class="mt-4 pt-4 border-t text-xs opacity-60 text-center">
+                    <p>Theme: {{ theme.preset }}</p>
                   </div>
                 </div>
               </div>
