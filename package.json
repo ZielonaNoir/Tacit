@@ -1,0 +1,29 @@
+{
+  "name": "tacit",
+  "version": "0.0.1",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vue-tsc && vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "vue": "^3.5.13",
+    "vue-router": "^4.4.5",
+    "pinia": "^2.3.0",
+    "@supabase/supabase-js": "^2.47.10",
+    "@vueuse/core": "^11.3.0",
+    "uuid": "^11.0.3",
+    "date-fns": "^4.1.0"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "^5.2.1",
+    "typescript": "^5.7.3",
+    "vue-tsc": "^2.1.36",
+    "vite": "^6.0.5",
+    "tailwindcss": "^3.4.17",
+    "autoprefixer": "^10.4.20",
+    "postcss": "^8.4.49"
+  }
+}
+
