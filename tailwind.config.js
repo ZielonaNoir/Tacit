@@ -25,6 +25,23 @@ export default {
       fontFamily: {
         heading: ['"Chonburi"', 'serif'],
         body: ['"Inter"', 'sans-serif'],
+        // Neo-Brutalism 风格字体
+        display: ['"Bungee"', '"Black Ops One"', 'display'],
+        mono: ['"JetBrains Mono"', '"Fira Code"', 'monospace'],
+        futuristic: ['"Orbitron"', 'sans-serif'],
+        space: ['"Space Grotesk"', 'sans-serif'],
+        serif: ['"Playfair Display"', '"Merriweather"', 'serif'],
+        // 直接字体名称，用于动态主题
+        'inter': ['"Inter"', 'sans-serif'],
+        'chonburi': ['"Chonburi"', 'serif'],
+        'bungee': ['"Bungee"', 'display'],
+        'black-ops': ['"Black Ops One"', 'display'],
+        'orbitron': ['"Orbitron"', 'sans-serif'],
+        'jetbrains-mono': ['"JetBrains Mono"', 'monospace'],
+        'fira-code': ['"Fira Code"', 'monospace'],
+        'space-grotesk': ['"Space Grotesk"', 'sans-serif'],
+        'playfair': ['"Playfair Display"', 'serif'],
+        'ibm-plex': ['"IBM Plex Sans"', 'sans-serif'],
       },
       boxShadow: {
         'retro': '4px 4px 0px 0px rgba(0,0,0,1)',

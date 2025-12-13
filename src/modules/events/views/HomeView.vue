@@ -18,10 +18,19 @@ onMounted(async () => {
       .order('created_at', { ascending: false })
       .limit(20)
 
-    if (error) throw error
+    if (error) {
+      console.error('Supabase error:', error)
+      throw error
+    }
+    
     events.value = data || []
+    console.log(`Loaded ${events.value.length} events`)
   } catch (err) {
     console.error('Error fetching events:', err)
+    // Show error to user
+    const errorMessage = err instanceof Error ? err.message : '未知错误'
+    console.error('Full error details:', err)
+    alert(`加载活动列表失败: ${errorMessage}`)
   } finally {
     loading.value = false
   }

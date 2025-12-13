@@ -32,10 +32,23 @@ const router = createRouter({
       meta: { requiresAuth: true }
     },
     {
+      path: '/events/:eventId/edit',
+      name: 'edit-event',
+      component: () => import('@/modules/events/components/CreateEventWizard.vue'),
+      props: true,
+      meta: { requiresAuth: true }
+    },
+    {
       path: '/events/create/simple',
       name: 'create-event-simple',
       component: () => import('@/modules/events/views/CreateEvent.vue'),
       meta: { requiresAuth: true }
+    },
+    {
+      path: '/events/:eventId/invite/:code',
+      name: 'invite-card',
+      component: () => import('@/modules/events/views/InviteCardView.vue'),
+      props: true
     }
   ]
 })

@@ -1,16 +1,24 @@
 <script setup lang="ts">
 import { ref, onMounted, computed } from 'vue'
-import { useRoute } from 'vue-router'
-import { fetchEvent, fetchEventPolls, fetchPollVotes, fetchRSVPs, submitPollVote } from '../services'
+import { useRoute, useRouter } from 'vue-router'
+import { fetchEvent, fetchEventPolls, fetchPollVotes, fetchPollVotesForEvent, fetchRSVPs, submitPollVote, lockPollDate, deleteEvent } from '../services'
 import { useAuth } from '@/composables/useAuth'
 import { useGuestIdentity } from '@/composables/useGuestIdentity'
 import ActivityFeed from '@/modules/feed/components/ActivityFeed.vue'
+import GuestList from '../components/GuestList.vue'
+import InviteShare from '../components/InviteShare.vue'
 import type { TacitEvent, EventTimePoll, EventPollVote, RSVP } from '@/types/database'
 import type { PollVoteStatus } from '@/types/database'
+import { supabase } from '@/lib/supabase'
+
+const props = defineProps<{
+  eventId?: string
+}>()
 
 const route = useRoute()
-const { user, isAuthenticated } = useAuth()
-const { getIdentityPayload } = useGuestIdentity()
+const router = useRouter()
+const { user } = useAuth()
+const { getIdentityPayload, getIdentityPayloadSafe } = useGuestIdentity()
 
 const isHost = computed(() => {
   return event.value && user.value && event.value.creator_id === user.value.id
@@ -33,19 +41,34 @@ const themeStyle = computed(() => {
 
 
 onMounted(async () => {
-  const eventId = route.params.id as string
+  const eventId = (props.eventId || route.params.id) as string
   try {
-    event.value = await fetchEvent(eventId)
-    polls.value = await fetchEventPolls(eventId)
+    // Parallel fetch event and polls first
+    const [eventData, pollsData] = await Promise.all([
+      fetchEvent(eventId),
+      fetchEventPolls(eventId)
+    ])
     
-    // Fetch votes for each poll
-    for (const poll of polls.value) {
-      pollVotes.value[poll.id] = await fetchPollVotes(poll.id)
-    }
+    event.value = eventData
+    polls.value = pollsData
     
-    rsvps.value = await fetchRSVPs(eventId)
+    // Then fetch votes (using poll IDs we just got) and RSVPs in parallel
+    // Only fetch votes if there are polls
+    const votePromise = pollsData.length > 0 
+      ? fetchPollVotesForEvent(eventId, pollsData.map(p => p.id))
+      : Promise.resolve({})
+    
+    const [votesData, rsvpsData] = await Promise.all([
+      votePromise,
+      fetchRSVPs(eventId)
+    ])
+    
+    pollVotes.value = votesData
+    rsvps.value = rsvpsData
   } catch (err) {
     console.error('Error fetching event data:', err)
+    // Show error to user
+    alert(`加载活动数据失败: ${err instanceof Error ? err.message : '未知错误'}`)
   } finally {
     loading.value = false
   }
@@ -56,7 +79,68 @@ const getVoteCounts = (pollId: string) => {
   return {
     yes: votes.filter(v => v.status === 'yes').length,
     ifNeedBe: votes.filter(v => v.status === 'if_need_be').length,
-    no: votes.filter(v => v.status === 'no').length
+    no: votes.filter(v => v.status === 'no').length,
+    total: votes.filter(v => v.status === 'yes' || v.status === 'if_need_be').length
+  }
+}
+
+// Find most popular poll (highest yes + if_need_be votes)
+const mostPopularPollId = computed(() => {
+  let maxVotes = -1
+  let popularId = ''
+  
+  for (const poll of polls.value) {
+    const counts = getVoteCounts(poll.id)
+    if (counts.total > maxVotes) {
+      maxVotes = counts.total
+      popularId = poll.id
+    }
+  }
+  
+  return popularId
+})
+
+const handleLockDate = async (pollId: string) => {
+  if (!confirm('Lock this date? This will finalize the event time and notify all participants.')) return
+
+  try {
+    const poll = polls.value.find(p => p.id === pollId)
+    if (!poll) return
+
+    const eventId = (props.eventId || route.params.id) as string
+    await lockPollDate(eventId, poll.start_time, poll.end_time)
+    
+    // Refresh event to get updated status
+    event.value = await fetchEvent(eventId)
+    
+    // Create activity log
+    const identity = await getIdentityPayloadSafe(user.value?.id)
+    await supabase.from('activities').insert({
+      event_id: eventId,
+      ...identity,
+      type: 'blast',
+      content: `Event date locked: ${new Date(poll.start_time).toLocaleString()}`
+    })
+
+    handleUpdate()
+  } catch (err) {
+    console.error('Error locking date:', err)
+    alert('Failed to lock date')
+  }
+}
+
+const handleDelete = async () => {
+  if (!confirm('Are you sure you want to delete this event? This action cannot be undone.')) return
+  
+  try {
+    if (!event.value) return
+    loading.value = true
+    await deleteEvent(event.value.id)
+    router.push('/')
+  } catch (err) {
+    console.error('Failed to delete event:', err)
+    alert('Failed to delete event')
+    loading.value = false
   }
 }
 
@@ -73,14 +157,53 @@ const getUserVote = (pollId: string) => {
 
 const handleVote = async (pollId: string, status: PollVoteStatus) => {
   try {
-    const identity = getIdentityPayload(user.value?.id)
+    // Ensure guest exists in DB before submitting vote
+    const identity = await getIdentityPayloadSafe(user.value?.id)
     await submitPollVote(pollId, status, identity)
     
-    // Refresh votes for this poll
+    // Refresh votes for this poll only (faster than refetching all)
     pollVotes.value[pollId] = await fetchPollVotes(pollId)
   } catch (err) {
     console.error('Error submitting vote:', err)
     alert('投票失败，请重试')
+  }
+}
+
+const handleUpdate = async () => {
+  // Refresh all data
+  const eventId = route.params.id as string
+  rsvps.value = await fetchRSVPs(eventId)
+  event.value = await fetchEvent(eventId)
+}
+
+// Spotify URL 验证和转换
+const isValidSpotifyUrl = (url: string): boolean => {
+  if (!url) return false
+  try {
+    const urlObj = new URL(url)
+    return urlObj.hostname.includes('spotify.com') && (
+      urlObj.pathname.includes('/playlist/') ||
+      urlObj.pathname.includes('/album/') ||
+      urlObj.pathname.includes('/track/') ||
+      urlObj.pathname.includes('/artist/')
+    )
+  } catch {
+    return false
+  }
+}
+
+const getSpotifyEmbedUrl = (url: string): string => {
+  if (!url) return ''
+  try {
+    const urlObj = new URL(url)
+    // 将 open.spotify.com 转换为 embed URL
+    if (urlObj.hostname === 'open.spotify.com') {
+      return url.replace('open.spotify.com', 'open.spotify.com/embed')
+    }
+    // 处理其他可能的 Spotify URL 格式
+    return url
+  } catch {
+    return url
   }
 }
 </script>
@@ -113,15 +236,38 @@ const handleVote = async (pollId: string, status: PollVoteStatus) => {
       <router-link to="/" class="font-bold uppercase tracking-widest text-xs hover:opacity-50 transition-opacity">
         ← TACIT HOME
       </router-link>
-      <div class="font-mono text-[10px] opacity-50">ID: {{ event.id.slice(0, 8) }}</div>
+      <div class="flex items-center gap-4">
+        <!-- Host Controls -->
+        <div v-if="isHost" class="flex items-center gap-4 mr-4 border-r pr-6 border-white/20">
+          <router-link
+            :to="`/events/${event.id}/edit`"
+            class="text-[10px] font-bold uppercase tracking-widest hover:opacity-100 opacity-60 transition-all hover:scale-105"
+          >
+            Edit Event
+          </router-link>
+          <button
+            @click="handleDelete"
+            class="text-[10px] font-bold uppercase tracking-widest hover:text-red-500 opacity-60 hover:opacity-100 transition-all hover:scale-105"
+          >
+            Delete
+          </button>
+        </div>
+
+        <InviteShare
+          :event-id="event.id"
+          :event-title="event.title"
+          :primary-color="themeStyle.color"
+        />
+        <div class="font-mono text-[10px] opacity-50">ID: {{ event.id.slice(0, 8) }}</div>
+      </div>
     </div>
 
     <!-- 主容器 -->
     <div class="container mx-auto px-4 py-24 relative z-10">
-      <div class="max-w-4xl mx-auto grid grid-cols-1 lg:grid-cols-12 gap-12">
+      <div class="max-w-[90rem] mx-auto grid grid-cols-1 lg:grid-cols-12 gap-8">
         
         <!-- 左侧：主要信息 (海报风格) -->
-        <div class="lg:col-span-7 space-y-12">
+        <div class="lg:col-span-4 space-y-12">
           <!-- 标题区 -->
           <div class="relative border-l-8 pl-8 py-4" :style="{ borderColor: themeStyle.color }">
             <h1 class="text-6xl md:text-8xl font-black uppercase leading-[0.8] mb-6 tracking-tighter break-words">
@@ -159,17 +305,26 @@ const handleVote = async (pollId: string, status: PollVoteStatus) => {
           <!-- 模块区域 -->
           <div v-if="event.modules_config" class="space-y-8 pt-8">
             <!-- Spotify -->
-            <div v-if="event.modules_config.spotify?.url" class="border-4 p-1" :style="{ borderColor: themeStyle.color }">
-              <div class="bg-black p-2 mb-1 text-white text-xs font-bold uppercase text-center">Sonic Landscape</div>
-              <iframe
-                :src="event.modules_config.spotify.url.replace('open.spotify.com', 'open.spotify.com/embed')"
-                width="100%"
-                height="152"
-                frameborder="0"
-                allowtransparency="true"
-                allow="encrypted-media"
-                class="grayscale hover:grayscale-0 transition-all duration-500"
-              ></iframe>
+            <div v-if="event.modules_config.spotify" class="border-4 p-1" :style="{ borderColor: themeStyle.color }">
+              <div class="bg-black p-2 mb-1 text-white text-xs font-bold uppercase text-center flex items-center justify-center gap-2">
+                <iconify-icon icon="mdi:spotify" class="text-lg"></iconify-icon>
+                Sonic Landscape
+              </div>
+              <div v-if="event.modules_config.spotify.url && isValidSpotifyUrl(event.modules_config.spotify.url)" class="bg-black">
+                <iframe
+                  :src="getSpotifyEmbedUrl(event.modules_config.spotify.url)"
+                  width="100%"
+                  height="152"
+                  frameborder="0"
+                  allowtransparency="true"
+                  allow="encrypted-media"
+                  class="grayscale hover:grayscale-0 transition-all duration-500"
+                ></iframe>
+              </div>
+              <div v-else class="bg-black p-8 text-center text-white/50">
+                <div class="text-xs font-bold uppercase tracking-widest">[ ERROR: EVENT NOT FOUND ]</div>
+                <div class="text-[10px] mt-2 opacity-70">请确保在创建活动时填写了有效的 Spotify 链接</div>
+              </div>
             </div>
 
             <!-- Gift Registry -->
@@ -183,13 +338,35 @@ const handleVote = async (pollId: string, status: PollVoteStatus) => {
                 </li>
               </ul>
             </div>
+
+            <!-- Dress Code -->
+            <div v-if="event.modules_config.dress_code?.text" class="border-t-2 pt-4" :style="{ borderColor: themeStyle.color + '40' }">
+              <h3 class="font-bold uppercase tracking-widest text-xs mb-2">
+                <iconify-icon icon="game-icons:clothes" class="inline align-text-bottom mr-1"></iconify-icon>
+                Dress Code
+              </h3>
+              <div class="text-sm font-medium opacity-90">{{ event.modules_config.dress_code.text }}</div>
+            </div>
+
+            <!-- Secret Address -->
+            <div v-if="event.modules_config.secret_address && (isHost || rsvps.some(r => (r.user_id === user?.id || r.guest_id) && r.status === 'going'))">
+              <div class="border-t-2 pt-4" :style="{ borderColor: themeStyle.color + '40' }">
+                <div class="border-2 p-4 bg-yellow-500/10" :style="{ borderColor: themeStyle.color + '40' }">
+                  <div class="font-bold uppercase text-xs mb-2 text-red-500">
+                    <iconify-icon icon="mdi:eye-off" class="inline align-text-bottom mr-1"></iconify-icon>
+                    Classified Location
+                  </div>
+                  <p class="font-mono text-sm">{{ event.modules_config.secret_address }}</p>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
 
-        <!-- 右侧：互动区域 -->
-        <div class="lg:col-span-5 space-y-8">
+        <!-- 中间：互动区域 (投票 + Guest List) -->
+        <div class="lg:col-span-4 space-y-8">
           <!-- Date Polling Section -->
-          <div v-if="polls.length > 0" class="border-4 p-6 relative bg-white/5 backdrop-blur-sm" :style="{ borderColor: themeStyle.color }">
+          <div v-if="polls.length > 0 && event.status === 'polling'" class="border-4 p-6 relative bg-white/5 backdrop-blur-sm" :style="{ borderColor: themeStyle.color }">
             <div class="absolute -top-3 left-4 px-2 text-xs font-black uppercase tracking-widest bg-black text-white transform -skew-x-12">
               Select Protocol
             </div>
@@ -198,9 +375,25 @@ const handleVote = async (pollId: string, status: PollVoteStatus) => {
               <div
                 v-for="poll in polls"
                 :key="poll.id"
-                class="p-4 border-2 border-dashed transition-all hover:border-solid hover:bg-current/10"
+                class="p-4 border-2 border-dashed transition-all hover:border-solid hover:bg-current/10 relative"
                 :style="{ borderColor: themeStyle.color }"
+                :class="{ 'ring-2 ring-green-500 ring-opacity-50': mostPopularPollId === poll.id && polls.length > 1 }"
               >
+                <!-- Most Popular Badge -->
+                <div v-if="mostPopularPollId === poll.id && polls.length > 1" class="absolute -top-2 -right-2 bg-green-500 text-black px-2 py-1 text-xs font-black uppercase">
+                  Popular
+                </div>
+                
+                <!-- Host Lock Button -->
+                <div v-if="isHost" class="absolute top-2 right-2">
+                  <button
+                    @click="handleLockDate(poll.id)"
+                    class="px-3 py-1 bg-coral-pink text-black text-xs font-black uppercase border-2 border-black hover:translate-x-1 hover:translate-y-1 transition-all"
+                  >
+                    Lock
+                  </button>
+                </div>
+
                 <div class="flex justify-between items-center mb-3">
                   <div class="font-mono text-sm font-bold">
                     {{ new Date(poll.start_time).toLocaleDateString() }}
@@ -233,32 +426,30 @@ const handleVote = async (pollId: string, status: PollVoteStatus) => {
             </div>
           </div>
 
-          <!-- Activity Feed -->
-          <div class="border-t-4 border-b-4 py-6" :style="{ borderColor: themeStyle.color }">
-            <h2 class="text-2xl font-black uppercase mb-6 tracking-tighter">Live Feed</h2>
-            <ActivityFeed :event-id="event.id" :is-host="!!isHost" />
-          </div>
-
           <!-- Guest List -->
-          <div v-if="event.show_guest_list && rsvps.length > 0">
-            <h2 class="text-sm font-bold uppercase mb-4 opacity-50 tracking-widest">Manifest ({{ rsvps.filter(r => r.status === 'going').length }})</h2>
-            <div class="flex flex-wrap gap-2">
-              <div
-                v-for="rsvp in rsvps.filter(r => r.status === 'going')"
-                :key="rsvp.id"
-                class="group relative"
-              >
-                <div class="w-10 h-10 rounded-full border-2 flex items-center justify-center font-bold text-xs hover:scale-110 transition-transform cursor-help bg-current text-black overflow-hidden" :style="{ borderColor: themeStyle.color }">
-                  {{ isAuthenticated && rsvp.user_id ? 'U' : 'G' }}
-                </div>
-                <!-- Tooltip -->
-                <div class="absolute bottom-full mb-2 left-1/2 -translate-x-1/2 bg-black text-white text-[10px] px-2 py-1 uppercase tracking-widest whitespace-nowrap opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity border border-white">
-                  {{ isAuthenticated && rsvp.user_id ? 'User' : (rsvp.guest_id ? 'Guest' : 'Anon') }}
-                </div>
-              </div>
+          <div>
+            <h2 class="text-2xl font-black uppercase mb-6 tracking-tighter">Guest List</h2>
+            <GuestList
+              :event-id="event.id"
+              :rsvps="rsvps"
+              :is-host="!!isHost"
+              :approval-required="event.approval_required || false"
+              :primary-color="themeStyle.color"
+              @update="handleUpdate"
+            />
+          </div>
+        </div>
+
+        <!-- 右侧：Live Feed (独立列，固定定位) -->
+        <div class="lg:col-span-4 relative">
+          <div class="sticky top-24 max-h-[calc(100vh-8rem)] overflow-y-auto pr-2" style="scrollbar-width: thin; scrollbar-color: rgba(255,255,255,0.3) transparent;">
+            <div class="border-t-4 border-b-4 py-6" :style="{ borderColor: themeStyle.color }">
+              <h2 class="text-2xl font-black uppercase mb-6 tracking-tighter">Live Feed</h2>
+              <ActivityFeed :event-id="event.id" :is-host="!!isHost" />
             </div>
           </div>
         </div>
+
       </div>
     </div>
   </div>

@@ -1,8 +1,37 @@
 <script setup lang="ts">
-import { ref, computed, watch } from 'vue'
+import { ref, computed, watch, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/composables/useAuth'
+import { availableFonts } from '@/lib/fonts'
+import { useDark } from '@vueuse/core'
+import { fetchEvent, updateEvent, fetchEventPolls, deleteEventPolls } from '../services'
+
+const props = defineProps<{
+  eventId?: string
+}>()
+
+const isEditMode = computed(() => !!props.eventId)
+const isDark = useDark()
+
+// 底部配置栏状态
+const activeConfigTab = ref<'theme' | 'color' | 'font' | 'appearance' | null>(null)
+const showConfigPanel = ref(false)
+
+const openConfig = (tab: 'theme' | 'color' | 'font' | 'appearance') => {
+  if (activeConfigTab.value === tab && showConfigPanel.value) {
+    showConfigPanel.value = false
+    activeConfigTab.value = null
+  } else {
+    activeConfigTab.value = tab
+    showConfigPanel.value = true
+  }
+}
+
+// 预设颜色
+const presetColors = [
+  '#FF8A95', '#FF4D00', '#B829E3', '#295CE3', '#00FFFF', '#00FF00', '#FFD700', '#FFFFFF'
+]
 
 const router = useRouter()
 const { user, profile } = useAuth()
@@ -15,6 +44,10 @@ const eventTitle = ref('')
 const eventDescription = ref('')
 const eventDate = ref<Date | null>(null)
 const isDecideLater = ref(false)
+const timeMode = ref<'fixed' | 'polling' | null>(null) // 新增：两个入口
+
+// 投票模式：调研截止时间
+const pollDeadline = ref<string>('') // ISO 格式日期时间
 
 // Step 2: Time & Location
 const startTime = ref('')
@@ -59,7 +92,7 @@ const themePresets: Record<string, typeof theme.value & { icon: string; name: st
   },
   'neon-nights': {
     preset: 'neon-nights',
-    font: 'Inter',
+    font: 'Orbitron', // 未来科技感字体
     primaryColor: '#00FFFF', // Cyan
     bgColor: '#1A0B2E', // Deep Purple
     effects: ['glow'],
@@ -68,7 +101,7 @@ const themePresets: Record<string, typeof theme.value & { icon: string; name: st
   },
   'retro-paper': {
     preset: 'retro-paper',
-    font: 'Chonburi',
+    font: 'Chonburi', // 装饰性字体
     primaryColor: '#FF4D00', // Orange
     bgColor: '#F0EAD6', // Eggshell/Beige
     effects: ['noise'],
@@ -77,7 +110,7 @@ const themePresets: Record<string, typeof theme.value & { icon: string; name: st
   },
   'y2k-glitch': {
     preset: 'y2k-glitch',
-    font: 'monospace',
+    font: 'JetBrains Mono', // 等宽编程字体
     primaryColor: '#00FF00', // Matrix Green
     bgColor: '#000000',
     effects: ['glitch'],
@@ -96,6 +129,114 @@ watch(() => theme.value.preset, (newPreset) => {
     theme.value.effects = p.effects
   }
 })
+
+onMounted(async () => {
+  if (isEditMode.value && props.eventId) {
+    loading.value = true
+    try {
+      const event = await fetchEvent(props.eventId)
+      
+      // Populate fields
+      eventTitle.value = event.title
+      eventDescription.value = event.description || ''
+      
+      // Date handling
+      if (event.status === 'polling') {
+        isDecideLater.value = true
+        timeMode.value = 'polling'
+        // Load poll deadline
+        if (event.poll_deadline) {
+          const deadline = new Date(event.poll_deadline)
+          pollDeadline.value = toLocalISOString(deadline).slice(0, 16)
+        }
+        // Fetch polls if polling
+        const polls = await fetchEventPolls(props.eventId)
+        if (polls.length > 0) {
+           timeSlots.value = polls.map(p => ({
+             // Convert UTC to local datetime-local format (YYYY-MM-DDTHH:mm)
+             // Simple hack: new Date(p.start_time).toISOString().slice(0, 16) gives UTC. 
+             // We need local.
+             start: toLocalISOString(new Date(p.start_time)).slice(0, 16),
+             end: p.end_time ? toLocalISOString(new Date(p.end_time)).slice(0, 16) : ''
+           }))
+        }
+      } else if (event.start_time) {
+        isDecideLater.value = false
+        timeMode.value = 'fixed'
+        const startD = new Date(event.start_time)
+        // YYYY-MM-DD
+        const year = startD.getFullYear()
+        const month = String(startD.getMonth() + 1).padStart(2, '0')
+        const day = String(startD.getDate()).padStart(2, '0')
+        eventDate.value = `${year}-${month}-${day}` as any
+        
+        // HH:mm
+        startTime.value = startD.toTimeString().slice(0, 5)
+        if (event.end_time) {
+          endTime.value = new Date(event.end_time).toTimeString().slice(0, 5)
+        }
+      }
+
+      // Location
+      timezone.value = event.timezone
+      locationName.value = event.location_name || ''
+      locationAddress.value = event.location_address || ''
+      locationUrl.value = event.location_url || ''
+      useSecretAddress.value = !!event.modules_config?.secret_address
+      maxCapacity.value = event.max_capacity
+
+      // Modules
+      if (event.modules_config) {
+        if (event.modules_config.spotify) {
+          modules.value.spotify = { enabled: true, url: event.modules_config.spotify.url }
+        }
+        if (event.modules_config.gift_registry) {
+           modules.value.giftRegistry = { enabled: true, items: event.modules_config.gift_registry.items || [] }
+        }
+        if (event.modules_config.dress_code) {
+           modules.value.dressCode = { enabled: true, text: event.modules_config.dress_code.text || '' }
+        }
+        if (event.modules_config.chip_in) {
+           modules.value.chipIn = { enabled: true, amount: event.modules_config.chip_in.amount, currency: event.modules_config.chip_in.currency }
+        }
+      }
+
+      // Theme
+      if (event.theme_config) {
+         // Don't trigger watcher automatically or handle it carefully
+         // Watcher triggers on preset change.
+         theme.value.preset = event.theme_config.preset || 'default'
+         // Wait for next tick or manually override after preset change
+         setTimeout(() => {
+            if (event.theme_config.font) theme.value.font = event.theme_config.font
+            if (event.theme_config.primary_color) theme.value.primaryColor = event.theme_config.primary_color
+            if (event.theme_config.bg_color) theme.value.bgColor = event.theme_config.bg_color
+            if (event.theme_config.effects) theme.value.effects = event.theme_config.effects
+         }, 100)
+      }
+      
+      // Privacy
+      privacy.value.showGuestList = event.show_guest_list
+      privacy.value.approvalRequired = event.approval_required || false
+      // Assuming it might be missing or stored in modules/theme? 
+      // Whatever, ignore for now or add to schema later.
+      
+    } catch (err) {
+      console.error('Failed to load event for editing', err)
+      alert('无法加载活动信息')
+      router.push('/')
+    } finally {
+      loading.value = false
+    }
+  }
+})
+
+// Helper for local ISO string
+function toLocalISOString(date: Date) {
+  const offset = date.getTimezoneOffset() * 60000 // offset in milliseconds
+  const localISOTime = (new Date(date.getTime() - offset)).toISOString().slice(0, -1)
+  return localISOTime
+}
 
 const privacy = ref({
   approvalRequired: false,
@@ -132,6 +273,31 @@ const removeGiftItem = (index: number) => {
 }
 
 const nextStep = () => {
+  // Step 1 验证：必须选择时间模式
+  if (currentStep.value === 1) {
+    if (timeMode.value === null) {
+      alert('Please select a time mode (Fixed Time or Find Time)')
+      return
+    }
+    if (timeMode.value === 'fixed' && !eventDate.value) {
+      alert('Please select a date for fixed time mode')
+      return
+    }
+  }
+  
+  // Step 2 验证：投票模式必须设置截止时间
+  if (currentStep.value === 2 && timeMode.value === 'polling') {
+    if (!pollDeadline.value) {
+      alert('Please set a poll deadline for Find Time mode')
+      return
+    }
+    const deadline = new Date(pollDeadline.value)
+    if (deadline <= new Date()) {
+      alert('Poll deadline must be in the future')
+      return
+    }
+  }
+
   if (currentStep.value < totalSteps) {
     currentStep.value++
   }
@@ -143,50 +309,30 @@ const prevStep = () => {
   }
 }
 
-const createEvent = async () => {
+const handleSave = async () => {
   if (!eventTitle.value.trim()) {
     alert('请输入活动名称')
     return
   }
 
   if (!user.value) {
-    router.push({ name: 'login', query: { redirect: '/events/create' } })
+    const redirect = isEditMode.value ? `/events/${props.eventId}/edit` : '/events/create'
+    router.push({ name: 'login', query: { redirect } })
     return
   }
 
   loading.value = true
   try {
-    // 确保 profile 存在
-    const { data: existingProfile } = await supabase
-      .from('profiles')
-      .select('id')
-      .eq('id', user.value.id)
-      .maybeSingle()
-
-    if (!existingProfile) {
-      const { error: profileError } = await supabase
-        .from('profiles')
-        .insert({
-          id: user.value.id,
-          full_name: user.value.user_metadata?.full_name || null,
-          username: user.value.user_metadata?.username || null
-        })
-      
-      if (profileError) {
-        alert('无法创建用户资料，请重试')
-        return
-      }
-    }
-
     // 准备活动数据
     const eventData = {
       creator_id: user.value.id,
       title: eventTitle.value,
       description: eventDescription.value || null,
-      status: isDecideLater.value ? 'polling' : 'draft',
+      status: isDecideLater.value ? 'polling' : 'scheduled', // 投票模式为 polling，固定时间为 scheduled
       start_time: isDecideLater.value || !eventDate.value ? null : new Date(`${eventDate.value}T${startTime.value}`).toISOString(),
       end_time: isDecideLater.value || !eventDate.value ? null : new Date(`${eventDate.value}T${endTime.value}`).toISOString(),
       timezone: timezone.value,
+      poll_deadline: isDecideLater.value && pollDeadline.value ? new Date(pollDeadline.value).toISOString() : null, // 调研截止时间
       location_name: useSecretAddress.value ? null : locationName.value || null,
       location_address: useSecretAddress.value ? null : locationAddress.value || null,
       location_url: locationUrl.value || null,
@@ -208,38 +354,120 @@ const createEvent = async () => {
         secret_address: useSecretAddress.value ? locationAddress.value : null
       },
       max_capacity: maxCapacity.value || null,
-      show_guest_list: privacy.value.showGuestList
+      show_guest_list: privacy.value.showGuestList,
+      approval_required: privacy.value.approvalRequired || false
     }
 
-    const { data: event, error } = await supabase
-      .from('events')
-      .insert(eventData)
-      .select()
-      .single()
+    let savedEventId = ''
 
-    if (error) throw error
+    if (isEditMode.value && props.eventId) {
+      // --- Update Logic ---
+      const { creator_id, ...updates } = eventData
+      
+      // Explicit status update
+      if (isDecideLater.value) {
+          (updates as any).status = 'polling'
+      } else {
+          (updates as any).status = 'scheduled'
+      }
 
-    // 如果有时间投票选项，创建它们
-    if (isDecideLater.value && timeSlots.value.length > 0) {
-      const pollData = timeSlots.value
-        .filter(slot => slot.start && slot.end)
-        .map(slot => ({
-          event_id: event.id,
-          start_time: new Date(slot.start).toISOString(),
-          end_time: new Date(slot.end).toISOString()
-        }))
+      await updateEvent(props.eventId, updates as any)
+      savedEventId = props.eventId
 
-      if (pollData.length > 0) {
-        await supabase
-          .from('event_time_polls')
-          .insert(pollData)
+      // Handle Polls (Full Replace)
+      // Always delete old polls first, regardless of current mode
+      try {
+        const deleteResult = await deleteEventPolls(savedEventId)
+        console.log('[CreateEventWizard] Deleted polls:', deleteResult)
+      } catch (error) {
+        console.error('[CreateEventWizard] Error deleting polls:', error)
+        // Continue anyway - might be RLS issue, but we'll try to insert
+        throw new Error(`无法删除旧的时间选项: ${error instanceof Error ? error.message : String(error)}`)
+      }
+      
+      // Only insert new polls if in polling mode
+      if (isDecideLater.value && timeSlots.value.length > 0) {
+        const pollData = timeSlots.value
+          .filter(slot => slot.start && slot.end)
+          .map(slot => ({
+            event_id: savedEventId,
+            start_time: new Date(slot.start).toISOString(),
+            end_time: new Date(slot.end).toISOString()
+          }))
+        
+        console.log('[CreateEventWizard] Inserting new polls:', pollData)
+        
+        if (pollData.length > 0) {
+          const { data: insertedPolls, error } = await supabase
+            .from('event_time_polls')
+            .insert(pollData)
+            .select()
+          
+          if (error) {
+            console.error('[CreateEventWizard] Error inserting polls:', error)
+            throw new Error(`无法保存时间选项: ${error.message}`)
+          }
+          
+          console.log('[CreateEventWizard] Successfully inserted polls:', insertedPolls)
+        }
+      } else {
+        console.log('[CreateEventWizard] Not in polling mode, skipping poll insertion')
+      }
+    } else {
+      // --- Create Logic ---
+      const { data: existingProfile } = await supabase
+        .from('profiles')
+        .select('id')
+        .eq('id', user.value.id)
+        .maybeSingle()
+
+      if (!existingProfile) {
+        const { error: profileError } = await supabase
+          .from('profiles')
+          .insert({
+            id: user.value.id,
+            full_name: user.value.user_metadata?.full_name || null,
+            username: user.value.user_metadata?.username || null
+          })
+        
+        if (profileError) {
+          alert('无法创建用户资料，请重试')
+          return
+        }
+      }
+
+      const { data: event, error } = await supabase
+        .from('events')
+        .insert(eventData)
+        .select()
+        .single()
+
+      if (error) throw error
+      savedEventId = event.id
+
+      if (isDecideLater.value && timeSlots.value.length > 0) {
+        const pollData = timeSlots.value
+          .filter(slot => slot.start && slot.end)
+          .map(slot => ({
+            event_id: event.id,
+            start_time: new Date(slot.start).toISOString(),
+            end_time: new Date(slot.end).toISOString()
+          }))
+
+        if (pollData.length > 0) {
+          await supabase
+            .from('event_time_polls')
+            .insert(pollData)
+        }
       }
     }
 
-    router.push(`/events/${event.id}`)
+    // Use replace instead of push to avoid adding to history
+    // This prevents "back" button from going back to edit mode
+    router.replace(`/events/${savedEventId}`)
   } catch (err: any) {
-    console.error('Error creating event:', err)
-    alert(err.message || '创建活动失败，请重试')
+    console.error('Error saving event:', err)
+    alert(err.message || '操作失败，请重试')
   } finally {
     loading.value = false
   }
@@ -247,17 +475,23 @@ const createEvent = async () => {
 </script>
 
 <template>
-  <div class="min-h-screen bg-black text-white relative overflow-hidden selection:bg-coral-pink selection:text-black">
+  <div class="min-h-screen transition-colors duration-300" :class="isDark ? 'bg-black text-white' : 'bg-surface-light text-black'">
     <!-- 背景网格装饰 -->
     <div class="absolute inset-0 pointer-events-none" 
-         style="background-image: linear-gradient(rgba(255, 255, 255, 0.05) 1px, transparent 1px), linear-gradient(90deg, rgba(255, 255, 255, 0.05) 1px, transparent 1px); background-size: 40px 40px;">
+         :style="{ 
+           backgroundImage: isDark 
+             ? `linear-gradient(rgba(255, 255, 255, 0.05) 1px, transparent 1px), linear-gradient(90deg, rgba(255, 255, 255, 0.05) 1px, transparent 1px)` 
+             : `linear-gradient(rgba(0, 0, 0, 0.05) 1px, transparent 1px), linear-gradient(90deg, rgba(0, 0, 0, 0.05) 1px, transparent 1px)`,
+           backgroundSize: '40px 40px' 
+         }">
     </div>
     
     <!-- 顶部技术参数装饰 -->
-    <div class="absolute top-0 left-0 w-full h-8 border-b border-white/20 flex items-center justify-between px-4 text-[10px] font-mono opacity-50 uppercase">
+    <div class="absolute top-0 left-0 w-full h-8 border-b flex items-center justify-between px-4 text-[10px] font-mono opacity-50 uppercase"
+         :class="isDark ? 'border-white/20' : 'border-black/10'">
       <span>SYS.TACIT.V1</span>
       <span>COORDINATES: {{ currentStep }}/{{ totalSteps }}</span>
-      <span>MODE: WIZARD</span>
+      <span>MODE: {{ isEditMode ? 'EDITOR' : 'WIZARD' }}</span>
     </div>
 
     <div class="container mx-auto px-4 py-16 relative z-10">
@@ -274,8 +508,8 @@ const createEvent = async () => {
               <div 
                 v-for="step in totalSteps" 
                 :key="step"
-                class="flex-1 h-1 bg-white/10 transition-all duration-300"
-                :class="{ 'bg-coral-pink shadow-[0_0_10px_rgba(255,138,149,0.5)]': step <= currentStep }"
+                class="flex-1 h-1 bg-current opacity-10 transition-all duration-300"
+                :class="{ '!opacity-100 !bg-coral-pink shadow-[0_0_10px_rgba(255,138,149,0.5)]': step <= currentStep }"
               ></div>
             </div>
           </div>
@@ -318,22 +552,58 @@ const createEvent = async () => {
                   ></textarea>
                 </div>
 
-                <div class="p-4 border border-white/10 bg-white/5">
-                  <label class="flex items-center gap-4 cursor-pointer">
-                    <div class="relative">
-                      <input
-                        v-model="isDecideLater"
-                        type="checkbox"
-                        class="peer sr-only"
-                      />
-                      <div class="w-12 h-6 bg-white/20 rounded-full peer-checked:bg-coral-pink transition-colors"></div>
-                      <div class="absolute top-1 left-1 w-4 h-4 bg-white rounded-full transition-transform peer-checked:translate-x-6"></div>
-                    </div>
-                    <span class="font-mono text-sm tracking-wider uppercase">Decide Date Later (Polling Mode)</span>
-                  </label>
+                <!-- 两个入口选择 -->
+                <div v-if="timeMode === null" class="space-y-4">
+                  <label class="block text-xs font-bold text-coral-pink uppercase tracking-wider mb-4">Time Selection Mode</label>
+                  <div class="grid grid-cols-2 gap-4">
+                    <button
+                      @click="timeMode = 'fixed'; isDecideLater = false"
+                      type="button"
+                      class="p-6 border-4 border-white/30 bg-white/5 hover:border-coral-pink hover:bg-coral-pink/10 transition-all duration-300 text-left group"
+                    >
+                      <div class="flex items-center gap-3 mb-2">
+                        <iconify-icon icon="material-symbols:calendar-today" class="text-2xl group-hover:scale-110 transition-transform" />
+                        <span class="font-black text-lg uppercase tracking-wider">Fixed Time</span>
+                      </div>
+                      <p class="text-xs opacity-70 font-mono">Set specific date & time directly</p>
+                    </button>
+                    <button
+                      @click="timeMode = 'polling'; isDecideLater = true"
+                      type="button"
+                      class="p-6 border-4 border-white/30 bg-white/5 hover:border-coral-pink hover:bg-coral-pink/10 transition-all duration-300 text-left group"
+                    >
+                      <div class="flex items-center gap-3 mb-2">
+                        <iconify-icon icon="material-symbols:poll" class="text-2xl group-hover:scale-110 transition-transform" />
+                        <span class="font-black text-lg uppercase tracking-wider">Find Time</span>
+                      </div>
+                      <p class="text-xs opacity-70 font-mono">Let participants vote for best time</p>
+                    </button>
+                  </div>
                 </div>
 
-                <div v-if="!isDecideLater" class="relative">
+                <!-- 显示当前选择的模式 -->
+                <div v-else class="p-4 border-2 border-coral-pink/50 bg-coral-pink/10">
+                  <div class="flex items-center justify-between">
+                    <div class="flex items-center gap-3">
+                      <iconify-icon 
+                        :icon="timeMode === 'fixed' ? 'material-symbols:calendar-today' : 'material-symbols:poll'" 
+                        class="text-xl" 
+                      />
+                      <span class="font-bold uppercase tracking-wider">
+                        {{ timeMode === 'fixed' ? 'Fixed Time Mode' : 'Find Time (Polling) Mode' }}
+                      </span>
+                    </div>
+                    <button
+                      @click="timeMode = null"
+                      type="button"
+                      class="text-xs font-mono uppercase hover:text-coral-pink transition-colors"
+                    >
+                      Change
+                    </button>
+                  </div>
+                </div>
+
+                <div v-if="timeMode === 'fixed' && !isDecideLater" class="relative">
                   <label class="absolute -top-3 left-4 bg-black px-2 text-xs font-bold text-coral-pink uppercase tracking-wider">Target Date</label>
                   <input
                     v-model="eventDate"
@@ -351,7 +621,8 @@ const createEvent = async () => {
             <div class="border-4 border-coral-pink p-8 bg-black">
               <h2 class="text-3xl font-black mb-6 uppercase tracking-wider">When & Where</h2>
               
-              <div v-if="!isDecideLater" class="space-y-6">
+              <!-- 固定时间模式 -->
+              <div v-if="timeMode === 'fixed' && !isDecideLater" class="space-y-6">
                 <div class="grid grid-cols-2 gap-4">
                   <div>
                     <label class="block font-bold mb-3 uppercase text-sm tracking-wider">Start Time</label>
@@ -367,6 +638,29 @@ const createEvent = async () => {
                       v-model="endTime"
                       type="time"
                       class="w-full px-4 py-4 border-4 border-white bg-black text-white focus:outline-none focus:border-coral-pink font-bold"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              <!-- 投票模式：调研截止时间 -->
+              <div v-if="timeMode === 'polling' && isDecideLater" class="space-y-6 mb-6">
+                <div class="p-4 border-2 border-coral-pink/50 bg-coral-pink/10">
+                  <div class="flex items-center gap-3 mb-4">
+                    <iconify-icon icon="material-symbols:poll" class="text-2xl text-coral-pink" />
+                    <span class="font-black text-lg uppercase tracking-wider">Poll Deadline</span>
+                  </div>
+                  <p class="text-xs opacity-70 mb-4 font-mono">
+                    Set a deadline for participants to submit their availability. After the deadline, invite cards will be automatically generated.
+                  </p>
+                  <div>
+                    <label class="block font-bold mb-3 uppercase text-sm tracking-wider">Deadline Date & Time</label>
+                    <input
+                      v-model="pollDeadline"
+                      type="datetime-local"
+                      required
+                      class="w-full px-4 py-4 border-4 border-white bg-black text-white focus:outline-none focus:border-coral-pink font-bold"
+                      :min="new Date().toISOString().slice(0, 16)"
                     />
                   </div>
                 </div>
@@ -421,49 +715,61 @@ const createEvent = async () => {
           <div v-show="currentStep === 3" class="space-y-6">
             <!-- Time Polling (if decide later) -->
             <div v-if="isDecideLater">
-            <div class="border-4 border-coral-pink p-8 bg-black">
-              <h2 class="text-3xl font-black mb-6 uppercase tracking-wider">Time Options</h2>
-              
-              <div class="space-y-4">
-                <div
-                  v-for="(slot, index) in timeSlots"
-                  :key="index"
-                  class="grid grid-cols-2 gap-4 p-4 border-4 border-white"
-                >
-                  <div>
-                    <label class="block font-bold mb-2 uppercase text-xs tracking-wider">Start</label>
-                    <input
-                      v-model="slot.start"
-                      type="datetime-local"
-                      class="w-full px-4 py-3 border-4 border-white bg-black text-white focus:outline-none focus:border-coral-pink font-bold text-sm"
-                    />
-                  </div>
-                  <div>
-                    <label class="block font-bold mb-2 uppercase text-xs tracking-wider">End</label>
-                    <input
-                      v-model="slot.end"
-                      type="datetime-local"
-                      class="w-full px-4 py-3 border-4 border-white bg-black text-white focus:outline-none focus:border-coral-pink font-bold text-sm"
-                    />
-                  </div>
-                  <button
-                    @click="removeTimeSlot(index)"
-                    type="button"
-                    class="col-span-2 px-4 py-2 bg-red-600 text-white font-bold border-4 border-black hover:translate-x-1 hover:translate-y-1 transition-all uppercase text-sm"
+              <div class="border-4 border-coral-pink p-8 bg-black">
+                <h2 class="text-3xl font-black mb-6 uppercase tracking-wider">TIME OPTIONS</h2>
+                <p class="text-sm opacity-70 mb-6 font-mono">
+                  Add time slots for participants to vote on. They can choose which times work best for them.
+                </p>
+                
+                <div class="space-y-4">
+                  <div
+                    v-for="(slot, index) in timeSlots"
+                    :key="index"
+                    class="p-4 border-2 border-white/30 bg-black/50 space-y-3"
                   >
-                    Remove
-                  </button>
-                </div>
+                    <div class="grid grid-cols-2 gap-4">
+                      <div>
+                        <label class="block font-bold mb-2 uppercase text-xs tracking-wider text-coral-pink">START</label>
+                        <input
+                          v-model="slot.start"
+                          type="datetime-local"
+                          class="w-full px-4 py-3 border-2 border-white/30 bg-transparent text-white focus:outline-none focus:border-coral-pink font-mono text-sm"
+                          placeholder="YYYY-MM-DDTHH:mm"
+                        />
+                      </div>
+                      <div>
+                        <label class="block font-bold mb-2 uppercase text-xs tracking-wider text-coral-pink">END</label>
+                        <input
+                          v-model="slot.end"
+                          type="datetime-local"
+                          class="w-full px-4 py-3 border-2 border-white/30 bg-transparent text-white focus:outline-none focus:border-coral-pink font-mono text-sm"
+                          placeholder="YYYY-MM-DDTHH:mm"
+                        />
+                      </div>
+                    </div>
+                    <button
+                      @click="removeTimeSlot(index)"
+                      type="button"
+                      class="w-full px-4 py-2 bg-red-600 text-white font-bold border-2 border-white/30 hover:bg-red-700 transition-colors uppercase text-sm"
+                    >
+                      REMOVE
+                    </button>
+                  </div>
 
-                <button
-                  @click="addTimeSlot"
-                  type="button"
-                  class="w-full px-6 py-4 bg-coral-pink text-black font-black border-4 border-black shadow-[6px_6px_0_0_#000] hover:shadow-[3px_3px_0_0_#000] hover:translate-x-1 hover:translate-y-1 transition-all uppercase"
-                >
-                  + Add Time Slot
-                </button>
+                  <button
+                    @click="addTimeSlot"
+                    type="button"
+                    class="w-full px-6 py-4 bg-coral-pink text-black font-black border-2 border-white/30 hover:bg-coral-pink/90 transition-colors uppercase flex items-center justify-center gap-2"
+                  >
+                    <iconify-icon icon="material-symbols:add" class="text-xl" />
+                    ADD TIME SLOT
+                  </button>
+
+                  <div v-if="timeSlots.length === 0" class="text-center py-8 opacity-50">
+                    <p class="text-sm font-mono">No time slots added yet. Click "ADD TIME SLOT" to add options for participants to vote on.</p>
+                  </div>
+                </div>
               </div>
-            </div>
             </div>
             
             <!-- Additional Info (if specific date) -->
@@ -514,15 +820,27 @@ const createEvent = async () => {
                       class="w-6 h-6 border-4 border-white bg-black text-coral-pink focus:ring-coral-pink"
                     />
                     <span class="iconify text-xl" data-icon="mdi:spotify"></span>
-                    <span class="font-bold uppercase text-sm tracking-wider">Spotify Playlist</span>
+                    <span class="font-bold uppercase text-sm tracking-wider">Spotify Playlist (Sonic Landscape)</span>
                   </label>
-                  <input
-                    v-if="modules.spotify.enabled"
-                    v-model="modules.spotify.url"
-                    type="url"
-                    class="w-full px-4 py-3 border-4 border-white bg-black text-white placeholder-white/50 focus:outline-none focus:border-coral-pink font-bold"
-                    placeholder="https://open.spotify.com/playlist/..."
-                  />
+                  <div v-if="modules.spotify.enabled" class="space-y-2">
+                    <input
+                      v-model="modules.spotify.url"
+                      type="url"
+                      class="w-full px-4 py-3 border-4 border-white bg-black text-white placeholder-white/50 focus:outline-none focus:border-coral-pink font-bold"
+                      placeholder="https://open.spotify.com/playlist/..."
+                    />
+                    <div class="text-xs text-white/60 leading-relaxed">
+                      <div class="font-bold mb-1">如何获取 Spotify 链接：</div>
+                      <ol class="list-decimal list-inside space-y-1">
+                        <li>打开 Spotify 应用或网页版</li>
+                        <li>找到你的播放列表、专辑或歌曲</li>
+                        <li>点击右上角的 <span class="font-bold">"分享"</span> 或 <span class="font-bold">"..."</span> 按钮</li>
+                        <li>选择 <span class="font-bold">"复制链接到播放列表"</span> 或 <span class="font-bold">"复制链接"</span></li>
+                        <li>将复制的链接粘贴到上方输入框</li>
+                      </ol>
+                      <div class="mt-2 text-[10px] opacity-50">支持：播放列表 / 专辑 / 单曲 / 艺术家</div>
+                    </div>
+                  </div>
                 </div>
 
                 <!-- Gift Registry -->
@@ -546,7 +864,7 @@ const createEvent = async () => {
                         v-model="modules.giftRegistry.items[index]"
                         type="url"
                         class="flex-1 px-4 py-3 border-4 border-white bg-black text-white placeholder-white/50 focus:outline-none focus:border-coral-pink font-bold"
-                        placeholder="Amazon/Wishlist URL"
+                        placeholder="https://www.amazon.com/hz/wishlist/..."
                       />
                       <button
                         @click="removeGiftItem(index)"
@@ -563,6 +881,36 @@ const createEvent = async () => {
                     >
                       + Add Item
                     </button>
+                    
+                    <!-- 使用说明 -->
+                    <div class="text-xs text-white/60 leading-relaxed mt-4 pt-4 border-t border-white/10">
+                      <div class="font-bold mb-2">如何获取礼品链接：</div>
+                      
+                      <div class="mb-3">
+                        <div class="font-semibold mb-1">📦 Amazon 心愿单：</div>
+                        <ol class="list-decimal list-inside space-y-1 ml-2">
+                          <li>访问 <span class="font-bold">amazon.com</span> 并登录账户</li>
+                          <li>点击右上角"账户与列表" → "创建心愿单"</li>
+                          <li>添加想要的礼品到心愿单</li>
+                          <li>进入心愿单页面，点击右上角"..." → "管理心愿单"</li>
+                          <li>找到"通过链接分享"，复制链接地址</li>
+                          <li>将链接粘贴到上方输入框</li>
+                        </ol>
+                      </div>
+                      
+                      <div class="mb-3">
+                        <div class="font-semibold mb-1">🎁 其他 Wishlist 平台：</div>
+                        <ul class="list-disc list-inside space-y-1 ml-2">
+                          <li><span class="font-bold">淘宝心愿单：</span> 打开商品页面，点击"加入心愿单"，复制分享链接</li>
+                          <li><span class="font-bold">京东心愿单：</span> 在商品页面点击"加入心愿单"，复制链接</li>
+                          <li><span class="font-bold">其他平台：</span> 复制任意商品的直接链接（单个礼品链接）</li>
+                        </ul>
+                      </div>
+                      
+                      <div class="text-[10px] opacity-50 italic mt-2">
+                        提示：可以添加多个链接，支持单个商品链接或整个心愿单链接
+                      </div>
+                    </div>
                   </div>
                 </div>
 
@@ -577,13 +925,40 @@ const createEvent = async () => {
                     <span class="iconify text-xl" data-icon="material-symbols:checkroom"></span>
                     <span class="font-bold uppercase text-sm tracking-wider">Dress Code</span>
                   </label>
-                  <textarea
-                    v-if="modules.dressCode.enabled"
-                    v-model="modules.dressCode.text"
-                    rows="3"
-                    class="w-full px-4 py-3 border-4 border-white bg-black text-white placeholder-white/50 focus:outline-none focus:border-coral-pink font-bold resize-none"
-                    placeholder="Casual, Formal, etc."
-                  ></textarea>
+                  <div v-if="modules.dressCode.enabled" class="space-y-3">
+                    <textarea
+                      v-model="modules.dressCode.text"
+                      rows="4"
+                      class="w-full px-4 py-3 border-4 border-white bg-black text-white placeholder-white/50 focus:outline-none focus:border-coral-pink font-bold resize-none"
+                      placeholder="例如：Smart Casual / 商务休闲 / 白色主题 / 复古风格..."
+                    ></textarea>
+                    
+                    <!-- 使用说明和示例 -->
+                    <div class="text-xs text-white/60 leading-relaxed">
+                      <div class="font-bold mb-2">填写说明：</div>
+                      
+                      <div class="mb-3">
+                        <div class="font-semibold mb-1">💡 基本格式示例：</div>
+                        <ul class="list-disc list-inside space-y-1 ml-2">
+                          <li><span class="font-bold">正式/商务：</span> "Formal / 正装 / Black Tie"</li>
+                          <li><span class="font-bold">休闲：</span> "Casual / 休闲 / 舒适随意"</li>
+                          <li><span class="font-bold">主题色：</span> "白色主题 / 红色元素 / All Black"</li>
+                          <li><span class="font-bold">风格：</span> "复古 / 波西米亚 / 运动风"</li>
+                        </ul>
+                      </div>
+                      
+                      <div class="mb-3">
+                        <div class="font-semibold mb-1">✨ 详细描述示例：</div>
+                        <div class="bg-black/30 p-2 rounded border border-white/10 text-[11px] font-mono italic">
+                          "Smart Casual - 商务休闲风格，避免过于正式或过于随意。建议：衬衫/针织衫 + 休闲裤/牛仔裤。"
+                        </div>
+                      </div>
+                      
+                      <div class="text-[10px] opacity-50 italic mt-2">
+                        提示：简洁明了地描述着装要求，帮助参与者准备合适的服装
+                      </div>
+                    </div>
+                  </div>
                 </div>
 
                 <!-- Chip In -->
@@ -689,6 +1064,31 @@ const createEvent = async () => {
                   </select>
                 </div>
 
+                <!-- Font Selection -->
+                <div>
+                  <label class="block font-bold mb-3 uppercase text-sm tracking-wider">Font Family</label>
+                  <select
+                    v-model="theme.font"
+                    class="w-full px-4 py-4 border-4 border-white bg-black text-white focus:outline-none focus:border-coral-pink font-bold"
+                    :style="{ fontFamily: theme.font }"
+                  >
+                    <optgroup 
+                      v-for="category in ['sans-serif', 'display', 'serif', 'monospace']" 
+                      :key="category"
+                      :label="category.charAt(0).toUpperCase() + category.slice(1)"
+                    >
+                      <option
+                        v-for="font in availableFonts.filter(f => f.category === category)"
+                        :key="font.name"
+                        :value="font.name"
+                      >
+                        {{ font.name }} - {{ font.description }}
+                      </option>
+                    </optgroup>
+                  </select>
+                  <p class="text-xs opacity-60 mt-2 italic">Preview: <span :style="{ fontFamily: theme.font }">The quick brown fox jumps over the lazy dog</span></p>
+                </div>
+
                 <div class="grid grid-cols-2 gap-4">
                   <div>
                     <label class="block font-bold mb-3 uppercase text-sm tracking-wider">Primary Color</label>
@@ -753,12 +1153,12 @@ const createEvent = async () => {
             </button>
             <button
               v-if="currentStep === totalSteps"
-              @click="createEvent"
+              @click="handleSave"
               :disabled="loading"
               type="button"
               class="flex-1 px-6 py-4 bg-coral-pink text-black font-black border-4 border-black shadow-[6px_6px_0_0_#000] hover:shadow-[3px_3px_0_0_#000] hover:translate-x-1 hover:translate-y-1 transition-all uppercase disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              {{ loading ? 'Creating...' : 'Create Event' }}
+              {{ loading ? 'Saving...' : (isEditMode ? 'Save Changes' : 'Create Event') }}
             </button>
           </div>
         </div>
@@ -859,6 +1259,155 @@ const createEvent = async () => {
             </div>
           </div>
         </div>
+      </div>
+    </div>
+
+    <!-- Luma-style Bottom Configuration Bar -->
+    <div v-if="currentStep === 5" class="fixed bottom-0 left-0 w-full z-50 flex justify-center pb-6 px-4 pointer-events-none">
+      <div class="bg-white/10 backdrop-blur-xl border border-white/20 rounded-2xl shadow-2xl p-2 pointer-events-auto max-w-3xl w-full flex flex-col gap-4 animate-slide-up">
+        
+        <!-- Config Panels -->
+        <div v-if="showConfigPanel" class="px-4 pt-2 pb-4 border-b border-white/10 min-h-[160px]">
+          
+          <!-- Color Panel -->
+          <div v-if="activeConfigTab === 'color'" class="space-y-4">
+            <div class="text-xs font-bold uppercase tracking-widest opacity-50">Primary Color</div>
+            <div class="flex flex-wrap gap-3">
+              <button
+                v-for="color in presetColors"
+                :key="color"
+                @click="theme.primaryColor = color"
+                class="w-10 h-10 rounded-full border-2 transition-all hover:scale-110 relative group"
+                :class="theme.primaryColor === color ? 'border-white ring-2 ring-white/50' : 'border-transparent hover:border-white/50'"
+                :style="{ backgroundColor: color }"
+              >
+                <span v-if="theme.primaryColor === color" class="absolute inset-0 flex items-center justify-center">
+                  <span class="iconify text-black/50 text-xl" data-icon="material-symbols:check"></span>
+                </span>
+              </button>
+              <!-- Custom Color Picker -->
+              <label class="w-10 h-10 rounded-full border-2 border-white/20 flex items-center justify-center cursor-pointer hover:bg-white/10 transition-colors relative overflow-hidden">
+                <input type="color" v-model="theme.primaryColor" class="absolute inset-0 opacity-0 cursor-pointer w-full h-full" />
+                <span class="iconify text-xl" data-icon="material-symbols:add"></span>
+              </label>
+            </div>
+          </div>
+
+          <!-- Theme Panel -->
+          <div v-if="activeConfigTab === 'theme'" class="space-y-4">
+            <div class="text-xs font-bold uppercase tracking-widest opacity-50">Theme Preset</div>
+            <div class="flex gap-4 overflow-x-auto pb-2 scrollbar-hide">
+              <button
+                v-for="(preset, key) in themePresets"
+                :key="key"
+                @click="theme.preset = key"
+                class="flex-shrink-0 w-32 p-3 rounded-xl border-2 transition-all flex flex-col items-center gap-2 group hover:bg-white/5"
+                :class="theme.preset === key ? 'border-coral-pink bg-white/10' : 'border-white/10'"
+              >
+                <div class="w-full aspect-video rounded bg-black/50 flex items-center justify-center border border-white/10 group-hover:border-white/30 transition-colors">
+                  <span 
+                    class="iconify text-2xl transition-transform group-hover:scale-110"
+                    :data-icon="preset.icon"
+                    :style="{ color: theme.preset === key ? preset.primaryColor : 'white' }"
+                  ></span>
+                </div>
+                <span class="text-xs font-bold uppercase">{{ preset.name }}</span>
+              </button>
+            </div>
+          </div>
+
+          <!-- Font Panel -->
+          <div v-if="activeConfigTab === 'font'" class="space-y-4">
+            <div class="text-xs font-bold uppercase tracking-widest opacity-50">Typography</div>
+            <div class="grid grid-cols-2 md:grid-cols-4 gap-2 h-[160px] overflow-y-auto pr-2 custom-scrollbar">
+              <button
+                v-for="font in availableFonts"
+                :key="font.name"
+                @click="theme.font = font.name"
+                class="p-3 rounded-lg border text-left transition-all hover:bg-white/5 flex flex-col justify-center"
+                :class="theme.font === font.name ? 'border-coral-pink bg-white/5' : 'border-white/10'"
+              >
+                <span class="text-xl leading-none mb-1" :style="{ fontFamily: font.name }">Ag</span>
+                <span class="text-[10px] opacity-60 uppercase tracking-wider truncate w-full">{{ font.name }}</span>
+              </button>
+            </div>
+          </div>
+
+          <!-- Appearance Panel -->
+          <div v-if="activeConfigTab === 'appearance'" class="space-y-4">
+            <div class="text-xs font-bold uppercase tracking-widest opacity-50">Appearance Mode</div>
+            <div class="flex gap-4">
+              <button
+                @click="isDark = false"
+                class="flex-1 p-4 rounded-xl border-2 flex items-center gap-3 transition-all"
+                :class="!isDark ? 'border-coral-pink bg-white/10' : 'border-white/10 hover:bg-white/5'"
+              >
+                <div class="w-8 h-8 rounded-full bg-white border border-gray-200 flex items-center justify-center text-black">
+                  <span class="iconify" data-icon="material-symbols:light-mode"></span>
+                </div>
+                <span class="font-bold">Light</span>
+              </button>
+              <button
+                @click="isDark = true"
+                class="flex-1 p-4 rounded-xl border-2 flex items-center gap-3 transition-all"
+                :class="isDark ? 'border-coral-pink bg-white/10' : 'border-white/10 hover:bg-white/5'"
+              >
+                <div class="w-8 h-8 rounded-full bg-gray-900 border border-gray-700 flex items-center justify-center text-white">
+                  <span class="iconify" data-icon="material-symbols:dark-mode"></span>
+                </div>
+                <span class="font-bold">Dark</span>
+              </button>
+            </div>
+          </div>
+
+        </div>
+
+        <!-- Menu Bar -->
+        <div class="flex items-center justify-between px-2">
+          <div class="flex items-center gap-1">
+            <button
+              @click="openConfig('color')"
+              class="px-4 py-2 rounded-lg flex items-center gap-2 hover:bg-white/10 transition-colors text-xs font-bold uppercase tracking-wider"
+              :class="{ 'text-coral-pink bg-white/5': activeConfigTab === 'color' }"
+            >
+              <div class="w-3 h-3 rounded-full border border-white/50" :style="{ backgroundColor: theme.primaryColor }"></div>
+              Color
+            </button>
+            <button
+              @click="openConfig('theme')"
+              class="px-4 py-2 rounded-lg flex items-center gap-2 hover:bg-white/10 transition-colors text-xs font-bold uppercase tracking-wider"
+              :class="{ 'text-coral-pink bg-white/5': activeConfigTab === 'theme' }"
+            >
+              <span class="iconify" data-icon="material-symbols:palette-outline"></span>
+              Theme
+            </button>
+            <button
+              @click="openConfig('font')"
+              class="px-4 py-2 rounded-lg flex items-center gap-2 hover:bg-white/10 transition-colors text-xs font-bold uppercase tracking-wider"
+              :class="{ 'text-coral-pink bg-white/5': activeConfigTab === 'font' }"
+            >
+              <span class="iconify" data-icon="material-symbols:text-fields"></span>
+              Font
+            </button>
+            <button
+              @click="openConfig('appearance')"
+              class="px-4 py-2 rounded-lg flex items-center gap-2 hover:bg-white/10 transition-colors text-xs font-bold uppercase tracking-wider"
+              :class="{ 'text-coral-pink bg-white/5': activeConfigTab === 'appearance' }"
+            >
+              <span class="iconify" :data-icon="isDark ? 'material-symbols:dark-mode-outline' : 'material-symbols:light-mode-outline'"></span>
+              Mode
+            </button>
+          </div>
+          
+          <button
+            v-if="showConfigPanel"
+            @click="showConfigPanel = false; activeConfigTab = null"
+            class="w-8 h-8 flex items-center justify-center rounded-full hover:bg-white/10 transition-colors"
+          >
+            <span class="iconify text-lg" data-icon="material-symbols:close"></span>
+          </button>
+        </div>
+
       </div>
     </div>
   </div>
