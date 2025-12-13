@@ -23,14 +23,14 @@ const rsvps = ref<RSVP[]>([])
 const loading = ref(true)
 
 const themeStyle = computed(() => {
-  if (!event.value?.theme_config) return {}
-  const theme = event.value.theme_config
+  const theme = event.value?.theme_config
   return {
-    fontFamily: theme.font || 'inherit',
-    backgroundColor: theme.bg_color || '#ffffff',
-    color: theme.primary_color || '#000000'
+    fontFamily: theme?.font || 'Inter',
+    backgroundColor: theme?.bg_color || '#000000',
+    color: theme?.primary_color || '#FF8A95'
   }
 })
+
 
 onMounted(async () => {
   const eventId = route.params.id as string
@@ -86,160 +86,176 @@ const handleVote = async (pollId: string, status: PollVoteStatus) => {
 </script>
 
 <template>
-  <div v-if="loading" class="min-h-screen flex items-center justify-center">
-    <p class="text-gray-500">加载中...</p>
+  <div v-if="loading" class="min-h-screen bg-black flex items-center justify-center text-white">
+    <div class="animate-pulse font-mono tracking-widest">LOADING DATA STREAM...</div>
   </div>
 
-  <div v-else-if="!event" class="min-h-screen flex items-center justify-center">
-    <p class="text-red-500">活动不存在</p>
+  <div v-else-if="!event" class="min-h-screen bg-black flex items-center justify-center text-red-500 font-bold text-xl uppercase tracking-widest">
+    [ ERROR: EVENT NOT FOUND ]
   </div>
 
   <div
     v-else
-    class="min-h-screen"
-    :style="themeStyle"
+    class="min-h-screen relative overflow-hidden transition-colors duration-500"
+    :style="{ backgroundColor: themeStyle.backgroundColor, color: themeStyle.color, fontFamily: themeStyle.fontFamily }"
   >
-    <div class="container mx-auto px-4 py-8">
-      <!-- Event Header -->
-      <div class="bg-white border-2 border-black shadow-retro p-8 mb-6">
-        <h1 class="text-5xl font-heading font-bold mb-4">{{ event.title }}</h1>
-        <p v-if="event.description" class="text-lg mb-4">{{ event.description }}</p>
+    <!-- 动态背景特效 -->
+    <div v-if="event.theme_config?.preset === 'neon-nights'" class="absolute inset-0 pointer-events-none mix-blend-screen opacity-30">
+      <div class="absolute top-0 left-0 w-full h-full bg-gradient-to-b from-transparent via-purple-500/20 to-transparent animate-pulse"></div>
+    </div>
+    <div v-if="event.theme_config?.preset === 'retro-paper'" class="absolute inset-0 pointer-events-none opacity-20 mix-blend-multiply"
+         style="background-image: url('https://www.transparenttextures.com/patterns/cream-paper.png');"></div>
+    <div v-if="event.theme_config?.preset === 'y2k-glitch'" class="absolute inset-0 pointer-events-none opacity-5"
+         style="background-image: repeating-linear-gradient(0deg, transparent, transparent 2px, #00ff00 2px, #00ff00 4px);"></div>
+
+    <!-- 顶部导航 -->
+    <div class="absolute top-0 left-0 w-full p-6 flex justify-between items-center z-50 mix-blend-difference text-white">
+      <router-link to="/" class="font-bold uppercase tracking-widest text-xs hover:opacity-50 transition-opacity">
+        ← TACIT HOME
+      </router-link>
+      <div class="font-mono text-[10px] opacity-50">ID: {{ event.id.slice(0, 8) }}</div>
+    </div>
+
+    <!-- 主容器 -->
+    <div class="container mx-auto px-4 py-24 relative z-10">
+      <div class="max-w-4xl mx-auto grid grid-cols-1 lg:grid-cols-12 gap-12">
         
-        <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mt-6">
-          <div v-if="event.start_time">
-            <h3 class="font-semibold mb-1">时间</h3>
-            <p>{{ new Date(event.start_time).toLocaleString() }}</p>
+        <!-- 左侧：主要信息 (海报风格) -->
+        <div class="lg:col-span-7 space-y-12">
+          <!-- 标题区 -->
+          <div class="relative border-l-8 pl-8 py-4" :style="{ borderColor: themeStyle.color }">
+            <h1 class="text-6xl md:text-8xl font-black uppercase leading-[0.8] mb-6 tracking-tighter break-words">
+              {{ event.title }}
+            </h1>
+            <p class="text-lg md:text-xl font-bold opacity-80 uppercase tracking-widest">
+              {{ event.status === 'polling' ? '/// DATE PENDING' : '/// CONFIRMED' }}
+            </p>
           </div>
-          <div v-if="event.location_name">
-            <h3 class="font-semibold mb-1">地点</h3>
-            <p>{{ event.location_name }}</p>
-            <p v-if="event.location_address" class="text-sm text-gray-600">{{ event.location_address }}</p>
+
+          <!-- 描述 -->
+          <div class="text-lg leading-relaxed font-medium opacity-90 border-t-2 pt-8" :style="{ borderColor: themeStyle.color + '40' }">
+            {{ event.description }}
+          </div>
+
+          <!-- 详细信息网格 -->
+          <div class="grid grid-cols-2 gap-8 font-mono text-sm uppercase tracking-wider">
+            <div>
+              <div class="opacity-50 text-[10px] mb-1">COORDINATES</div>
+              <div class="font-bold text-lg">{{ event.location_name || 'TBD' }}</div>
+              <div class="opacity-70 text-xs mt-1">{{ event.location_address }}</div>
+            </div>
+            <div>
+              <div class="opacity-50 text-[10px] mb-1">TIMEFRAME</div>
+              <div v-if="event.start_time" class="font-bold text-lg">
+                {{ new Date(event.start_time).toLocaleDateString() }}
+              </div>
+              <div v-if="event.start_time" class="opacity-70 text-xs mt-1">
+                {{ new Date(event.start_time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) }}
+              </div>
+              <div v-else class="font-bold text-lg italic">VOTING IN PROGRESS</div>
+            </div>
+          </div>
+
+          <!-- 模块区域 -->
+          <div v-if="event.modules_config" class="space-y-8 pt-8">
+            <!-- Spotify -->
+            <div v-if="event.modules_config.spotify?.url" class="border-4 p-1" :style="{ borderColor: themeStyle.color }">
+              <div class="bg-black p-2 mb-1 text-white text-xs font-bold uppercase text-center">Sonic Landscape</div>
+              <iframe
+                :src="event.modules_config.spotify.url.replace('open.spotify.com', 'open.spotify.com/embed')"
+                width="100%"
+                height="152"
+                frameborder="0"
+                allowtransparency="true"
+                allow="encrypted-media"
+                class="grayscale hover:grayscale-0 transition-all duration-500"
+              ></iframe>
+            </div>
+
+            <!-- Gift Registry -->
+            <div v-if="event.modules_config.gift_registry?.items?.length" class="border-t-2 pt-4" :style="{ borderColor: themeStyle.color + '40' }">
+              <h3 class="font-bold uppercase tracking-widest text-xs mb-4">Registry Protocol</h3>
+              <ul class="space-y-2">
+                <li v-for="(item, index) in event.modules_config.gift_registry.items" :key="index">
+                  <a :href="item" target="_blank" class="block p-3 border border-current hover:bg-current hover:text-black transition-colors text-sm font-bold uppercase text-center">
+                    Item 0{{ index + 1 }} →
+                  </a>
+                </li>
+              </ul>
+            </div>
           </div>
         </div>
-      </div>
 
-      <!-- Date Polling Section -->
-      <div v-if="polls.length > 0" class="bg-white border-2 border-black shadow-retro p-6 mb-6">
-        <h2 class="text-3xl font-heading font-bold mb-6">选择时间</h2>
-        <div class="space-y-4">
-          <div
-            v-for="poll in polls"
-            :key="poll.id"
-            class="border-2 border-gray-300 p-4"
-          >
-            <div class="flex justify-between items-center mb-3">
-              <div>
-                <p class="font-semibold">
-                  {{ new Date(poll.start_time).toLocaleString() }}
-                </p>
-                <p v-if="poll.end_time" class="text-sm text-gray-600">
-                  至 {{ new Date(poll.end_time).toLocaleString() }}
-                </p>
-              </div>
-              <div class="flex gap-2 text-sm">
-                <span class="text-green-600">✓ {{ getVoteCounts(poll.id).yes }}</span>
-                <span class="text-yellow-600">? {{ getVoteCounts(poll.id).ifNeedBe }}</span>
-                <span class="text-red-600">✗ {{ getVoteCounts(poll.id).no }}</span>
-              </div>
+        <!-- 右侧：互动区域 -->
+        <div class="lg:col-span-5 space-y-8">
+          <!-- Date Polling Section -->
+          <div v-if="polls.length > 0" class="border-4 p-6 relative bg-white/5 backdrop-blur-sm" :style="{ borderColor: themeStyle.color }">
+            <div class="absolute -top-3 left-4 px-2 text-xs font-black uppercase tracking-widest bg-black text-white transform -skew-x-12">
+              Select Protocol
             </div>
             
-            <div class="flex gap-2">
-              <button
-                @click="handleVote(poll.id, 'yes')"
-                class="px-4 py-2 bg-green-500 text-white border-2 border-black shadow-retro hover:translate-x-1 hover:translate-y-1 hover:shadow-none transition-all"
-                :class="{ 'opacity-50 cursor-not-allowed': getUserVote(poll.id) === 'yes' }"
+            <div class="space-y-4 mt-2">
+              <div
+                v-for="poll in polls"
+                :key="poll.id"
+                class="p-4 border-2 border-dashed transition-all hover:border-solid hover:bg-current/10"
+                :style="{ borderColor: themeStyle.color }"
               >
-                ✓ 可以
-              </button>
-              <button
-                @click="handleVote(poll.id, 'if_need_be')"
-                class="px-4 py-2 bg-yellow-500 text-white border-2 border-black shadow-retro hover:translate-x-1 hover:translate-y-1 hover:shadow-none transition-all"
-                :class="{ 'opacity-50 cursor-not-allowed': getUserVote(poll.id) === 'if_need_be' }"
-              >
-                ? 可能
-              </button>
-              <button
-                @click="handleVote(poll.id, 'no')"
-                class="px-4 py-2 bg-red-500 text-white border-2 border-black shadow-retro hover:translate-x-1 hover:translate-y-1 hover:shadow-none transition-all"
-                :class="{ 'opacity-50 cursor-not-allowed': getUserVote(poll.id) === 'no' }"
-              >
-                ✗ 不行
-              </button>
+                <div class="flex justify-between items-center mb-3">
+                  <div class="font-mono text-sm font-bold">
+                    {{ new Date(poll.start_time).toLocaleDateString() }}
+                    <span class="opacity-60 block text-xs">{{ new Date(poll.start_time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) }}</span>
+                  </div>
+                  <div class="flex gap-1 text-[10px] font-black">
+                    <span class="px-1 bg-green-500 text-black" v-if="getVoteCounts(poll.id).yes">{{ getVoteCounts(poll.id).yes }}</span>
+                    <span class="px-1 bg-yellow-500 text-black" v-if="getVoteCounts(poll.id).ifNeedBe">{{ getVoteCounts(poll.id).ifNeedBe }}</span>
+                  </div>
+                </div>
+                
+                <div class="grid grid-cols-3 gap-2">
+                  <button
+                    @click="handleVote(poll.id, 'yes')"
+                    class="py-2 text-xs font-bold uppercase border hover:bg-green-500 hover:text-black hover:border-green-500 transition-colors"
+                    :class="getUserVote(poll.id) === 'yes' ? 'bg-green-500 text-black border-green-500' : 'border-current opacity-50 hover:opacity-100'"
+                  >Yes</button>
+                  <button
+                    @click="handleVote(poll.id, 'if_need_be')"
+                    class="py-2 text-xs font-bold uppercase border hover:bg-yellow-500 hover:text-black hover:border-yellow-500 transition-colors"
+                    :class="getUserVote(poll.id) === 'if_need_be' ? 'bg-yellow-500 text-black border-yellow-500' : 'border-current opacity-50 hover:opacity-100'"
+                  >Maybe</button>
+                  <button
+                    @click="handleVote(poll.id, 'no')"
+                    class="py-2 text-xs font-bold uppercase border hover:bg-red-500 hover:text-black hover:border-red-500 transition-colors"
+                    :class="getUserVote(poll.id) === 'no' ? 'bg-red-500 text-black border-red-500' : 'border-current opacity-50 hover:opacity-100'"
+                  >No</button>
+                </div>
+              </div>
             </div>
           </div>
-        </div>
-      </div>
 
-      <!-- Modules Section -->
-      <div v-if="event.modules_config" class="bg-white border-4 border-black shadow-retro p-6 mb-6 space-y-6">
-        <h2 class="text-3xl font-heading font-bold mb-4">Event Details</h2>
-        
-        <!-- Spotify -->
-        <div v-if="event.modules_config.spotify && event.modules_config.spotify.url" class="border-4 border-black p-4">
-          <h3 class="font-bold mb-2">🎵 Spotify Playlist</h3>
-          <iframe
-            :src="event.modules_config.spotify.url.replace('open.spotify.com', 'open.spotify.com/embed')"
-            width="100%"
-            height="352"
-            frameborder="0"
-            allowtransparency="true"
-            allow="encrypted-media"
-            class="border-4 border-black"
-          ></iframe>
-        </div>
+          <!-- Activity Feed -->
+          <div class="border-t-4 border-b-4 py-6" :style="{ borderColor: themeStyle.color }">
+            <h2 class="text-2xl font-black uppercase mb-6 tracking-tighter">Live Feed</h2>
+            <ActivityFeed :event-id="event.id" :is-host="!!isHost" />
+          </div>
 
-        <!-- Gift Registry -->
-        <div v-if="event.modules_config.gift_registry?.items?.length" class="border-4 border-black p-4">
-          <h3 class="font-bold mb-2">🎁 Gift Registry</h3>
-          <ul class="space-y-2">
-            <li v-for="(item, index) in event.modules_config.gift_registry.items" :key="index">
-              <a :href="item" target="_blank" class="text-coral-pink hover:underline font-bold">
-                Gift {{ index + 1 }}
-              </a>
-            </li>
-          </ul>
-        </div>
-
-        <!-- Dress Code -->
-        <div v-if="event.modules_config.dress_code?.text" class="border-4 border-black p-4">
-          <h3 class="font-bold mb-2">👔 Dress Code</h3>
-          <p class="font-semibold">{{ event.modules_config.dress_code.text }}</p>
-        </div>
-      </div>
-
-      <!-- Activity Feed -->
-      <div class="bg-white border-4 border-black shadow-retro p-6 mb-6">
-        <h2 class="text-3xl font-heading font-bold mb-4">Activity Feed</h2>
-        <ActivityFeed :event-id="event.id" :is-host="!!isHost" />
-      </div>
-
-      <!-- Guest List -->
-      <div v-if="event.show_guest_list && rsvps.length > 0" class="bg-white border-4 border-black shadow-retro p-6">
-        <h2 class="text-3xl font-heading font-bold mb-4">Participants</h2>
-        <div class="space-y-3">
-          <div
-            v-for="rsvp in rsvps.filter(r => r.status === 'going')"
-            :key="rsvp.id"
-            class="flex items-center gap-3 p-4 border-4 border-black"
-          >
-            <div class="w-12 h-12 rounded-full bg-brand-purple flex items-center justify-center text-white font-black text-xl">
-              {{ isAuthenticated && rsvp.user_id ? 'U' : 'G' }}
-            </div>
-            <div class="flex-1">
-              <p class="font-bold text-lg">
-                {{ isAuthenticated && rsvp.user_id ? 'User' : (rsvp.guest_id ? 'Guest' : 'Anonymous') }}
-              </p>
-              <p v-if="rsvp.comment" class="text-sm text-gray-600 mt-1">{{ rsvp.comment }}</p>
-              <p v-if="rsvp.guests_count > 0" class="text-sm text-gray-600 mt-1">
-                +{{ rsvp.guests_count }} guest{{ rsvp.guests_count > 1 ? 's' : '' }}
-              </p>
-            </div>
-            <div v-if="isHost" class="flex gap-2">
-              <button
-                class="px-4 py-2 bg-red-600 text-white font-bold border-4 border-black hover:translate-x-1 hover:translate-y-1 transition-all uppercase text-sm"
+          <!-- Guest List -->
+          <div v-if="event.show_guest_list && rsvps.length > 0">
+            <h2 class="text-sm font-bold uppercase mb-4 opacity-50 tracking-widest">Manifest ({{ rsvps.filter(r => r.status === 'going').length }})</h2>
+            <div class="flex flex-wrap gap-2">
+              <div
+                v-for="rsvp in rsvps.filter(r => r.status === 'going')"
+                :key="rsvp.id"
+                class="group relative"
               >
-                Remove
-              </button>
+                <div class="w-10 h-10 rounded-full border-2 flex items-center justify-center font-bold text-xs hover:scale-110 transition-transform cursor-help bg-current text-black overflow-hidden" :style="{ borderColor: themeStyle.color }">
+                  {{ isAuthenticated && rsvp.user_id ? 'U' : 'G' }}
+                </div>
+                <!-- Tooltip -->
+                <div class="absolute bottom-full mb-2 left-1/2 -translate-x-1/2 bg-black text-white text-[10px] px-2 py-1 uppercase tracking-widest whitespace-nowrap opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity border border-white">
+                  {{ isAuthenticated && rsvp.user_id ? 'User' : (rsvp.guest_id ? 'Guest' : 'Anon') }}
+                </div>
+              </div>
             </div>
           </div>
         </div>

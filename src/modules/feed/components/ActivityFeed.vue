@@ -112,19 +112,19 @@ const formatTime = (dateString: string) => {
 <template>
   <div class="space-y-6">
     <!-- Blast Form (Host Only) -->
-    <div v-if="isHost" class="bg-coral-pink border-4 border-black p-6">
-      <h3 class="font-black text-xl mb-4 uppercase tracking-wider">Text Blast</h3>
-      <div class="flex gap-4">
+    <div v-if="isHost" class="bg-coral-pink border-4 border-black p-6 relative">
+      <div class="absolute -top-3 left-4 bg-black text-white px-2 text-xs font-bold uppercase tracking-widest">Host Command</div>
+      <div class="flex gap-4 mt-2">
         <input
           v-model="newComment"
           @keyup.enter="submitBlast(newComment)"
           type="text"
-          class="flex-1 px-4 py-3 border-4 border-black bg-white text-black font-bold focus:outline-none"
-          placeholder="发送广播消息..."
+          class="flex-1 px-4 py-3 border-4 border-black bg-white text-black font-bold focus:outline-none placeholder-gray-500 uppercase"
+          placeholder="SEND BLAST MESSAGE..."
         />
         <button
           @click="submitBlast(newComment); newComment = ''"
-          class="px-6 py-3 bg-black text-white font-black border-4 border-black shadow-[4px_4px_0_0_#000] hover:shadow-[2px_2px_0_0_#000] hover:translate-x-1 hover:translate-y-1 transition-all uppercase"
+          class="px-6 py-3 bg-black text-white font-black border-4 border-black shadow-[4px_4px_0_0_#fff] hover:shadow-none hover:translate-x-1 hover:translate-y-1 transition-all uppercase"
         >
           Blast
         </button>
@@ -136,89 +136,91 @@ const formatTime = (dateString: string) => {
       <div
         v-for="activity in activities"
         :key="activity.id"
-        class="border-4 border-black bg-white p-6"
+        class="border-4 border-black bg-white p-6 relative group hover:translate-x-1 hover:translate-y-1 transition-transform"
         :class="{
-          'bg-yellow-100 border-coral-pink': activity.type === 'blast',
-          'bg-blue-50': activity.type === 'rsvp_log'
+          'bg-yellow-300 border-black': activity.type === 'blast',
+          'bg-white': activity.type !== 'blast'
         }"
       >
         <!-- Blast -->
         <div v-if="activity.type === 'blast'" class="flex items-start gap-4">
-          <div class="w-12 h-12 bg-coral-pink rounded-full flex items-center justify-center text-black font-black text-xl">
-            📢
+          <div class="w-12 h-12 bg-black text-yellow-300 border-2 border-black rounded-full flex items-center justify-center font-black text-xl">
+            !
           </div>
           <div class="flex-1">
-            <div class="font-black text-lg mb-2 uppercase tracking-wider">Host Blast</div>
-            <p class="text-lg font-bold">{{ activity.content }}</p>
-            <p class="text-sm text-gray-600 mt-2">{{ formatTime(activity.created_at) }}</p>
+            <div class="font-black text-xs mb-1 uppercase tracking-wider opacity-60">System Broadcast</div>
+            <p class="text-lg font-bold font-mono uppercase leading-tight">{{ activity.content }}</p>
+            <p class="text-[10px] font-mono mt-2 opacity-60">{{ formatTime(activity.created_at) }}</p>
           </div>
         </div>
 
         <!-- RSVP Log -->
-        <div v-else-if="activity.type === 'rsvp_log'" class="flex items-center gap-4">
-          <div class="w-12 h-12 bg-green-500 rounded-full flex items-center justify-center text-white font-black text-xl">
+        <div v-else-if="activity.type === 'rsvp_log'" class="flex items-center gap-4 opacity-70">
+          <div class="w-8 h-8 bg-green-500 border-2 border-black rounded-full flex items-center justify-center text-black font-black text-sm">
             ✓
           </div>
-          <div class="flex-1">
-            <p class="text-lg font-bold">{{ activity.content }}</p>
-            <p class="text-sm text-gray-600">{{ formatTime(activity.created_at) }}</p>
+          <div class="flex-1 flex justify-between items-center">
+            <p class="text-sm font-bold font-mono uppercase">{{ activity.content }}</p>
+            <p class="text-[10px] font-mono opacity-60">{{ formatTime(activity.created_at) }}</p>
           </div>
         </div>
 
         <!-- Comment -->
         <div v-else-if="activity.type === 'comment'" class="flex items-start gap-4">
-          <div class="w-12 h-12 bg-brand-purple rounded-full flex items-center justify-center text-white font-bold">
+          <div class="w-10 h-10 bg-black text-white border-2 border-black rounded-none flex items-center justify-center font-bold">
             {{ getActivityAuthor(activity)[0].toUpperCase() }}
           </div>
           <div class="flex-1">
-            <div class="font-bold mb-2">{{ getActivityAuthor(activity) }}</div>
-            <p class="text-base">{{ activity.content }}</p>
-            <p class="text-sm text-gray-600 mt-2">{{ formatTime(activity.created_at) }}</p>
+            <div class="flex justify-between items-baseline mb-1">
+              <div class="font-bold uppercase text-xs tracking-wider">{{ getActivityAuthor(activity) }}</div>
+              <div class="text-[10px] font-mono opacity-50">{{ formatTime(activity.created_at) }}</div>
+            </div>
+            <p class="text-base font-medium leading-snug border-l-4 border-black pl-3 py-1">{{ activity.content }}</p>
           </div>
         </div>
 
         <!-- Photo -->
         <div v-else-if="activity.type === 'photo'" class="flex items-start gap-4">
-          <div class="w-12 h-12 bg-blue-500 rounded-full flex items-center justify-center text-white font-bold">
-            📷
+          <div class="w-10 h-10 bg-blue-500 border-2 border-black flex items-center justify-center text-white font-bold">
+            P
           </div>
           <div class="flex-1">
-            <div class="font-bold mb-2">{{ getActivityAuthor(activity) }}</div>
-            <img
-              v-if="activity.media_url"
-              :src="activity.media_url"
-              alt="Photo"
-              class="max-w-full h-auto rounded border-4 border-black mt-2"
-            />
-            <p v-if="activity.content" class="text-base mt-2">{{ activity.content }}</p>
-            <p class="text-sm text-gray-600 mt-2">{{ formatTime(activity.created_at) }}</p>
+            <div class="font-bold uppercase text-xs mb-2">{{ getActivityAuthor(activity) }} uploaded:</div>
+            <div class="border-4 border-black p-1 bg-white inline-block rotate-1 hover:rotate-0 transition-transform">
+              <img
+                v-if="activity.media_url"
+                :src="activity.media_url"
+                alt="Photo"
+                class="max-w-[200px] h-auto grayscale hover:grayscale-0 transition-all"
+              />
+            </div>
+            <p v-if="activity.content" class="text-sm mt-2 font-mono">{{ activity.content }}</p>
+            <p class="text-[10px] font-mono mt-1 opacity-50">{{ formatTime(activity.created_at) }}</p>
           </div>
         </div>
       </div>
 
-      <div v-if="activities.length === 0 && !loading" class="text-center py-12 text-gray-500">
-        <p>还没有动态</p>
+      <div v-if="activities.length === 0 && !loading" class="text-center py-12 border-2 border-dashed border-current opacity-50 font-mono text-xs uppercase tracking-widest">
+        No Signal Detected
       </div>
     </div>
 
     <!-- Comment Form -->
-    <div class="border-4 border-black bg-white p-6">
-      <h3 class="font-black text-xl mb-4 uppercase tracking-wider">Add Comment</h3>
-      <div class="flex gap-4">
-        <input
-          v-model="newComment"
-          @keyup.enter="submitComment"
-          type="text"
-          class="flex-1 px-4 py-3 border-4 border-black bg-white text-black font-bold focus:outline-none focus:border-coral-pink"
-          placeholder="写下你的评论..."
-        />
-        <button
-          @click="submitComment"
-          class="px-6 py-3 bg-black text-white font-black border-4 border-black shadow-[4px_4px_0_0_#000] hover:shadow-[2px_2px_0_0_#000] hover:translate-x-1 hover:translate-y-1 transition-all uppercase"
-        >
-          Post
-        </button>
-      </div>
+    <div class="border-4 border-black bg-white p-4 flex gap-4 items-center relative">
+      <div class="absolute -top-3 left-4 bg-black text-white px-2 text-xs font-bold uppercase tracking-widest">New Transmission</div>
+      <input
+        v-model="newComment"
+        @keyup.enter="submitComment"
+        type="text"
+        class="flex-1 bg-transparent border-none focus:ring-0 font-mono text-sm placeholder-gray-400"
+        placeholder="Type your message..."
+      />
+      <button
+        @click="submitComment"
+        class="px-4 py-2 bg-black text-white font-bold text-xs uppercase hover:bg-coral-pink hover:text-black transition-colors"
+      >
+        Send
+      </button>
     </div>
   </div>
 </template>
