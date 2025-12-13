@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, watch, onMounted } from 'vue'
+import { ref, computed, watch, onMounted, nextTick } from 'vue'
 import { useRouter } from 'vue-router'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/composables/useAuth'
@@ -15,7 +15,7 @@ const isEditMode = computed(() => !!props.eventId)
 const isDark = useDark()
 
 // 底部配置栏状态
-const activeConfigTab = ref<'theme' | 'color' | 'font' | 'appearance' | null>(null)
+const activeConfigTab = ref<'theme' | 'color' | 'font' | 'appearance' | 'effects' | null>(null)
 const showConfigPanel = ref(false)
 
 const openConfig = (tab: 'theme' | 'color' | 'font' | 'appearance') => {
@@ -130,6 +130,79 @@ watch(() => theme.value.preset, (newPreset) => {
   }
 })
 
+// 预览区域特效初始化
+const initPreviewConfetti = () => {
+  const container = document.getElementById('preview-confetti-container')
+  if (!container) return
+
+  const colors = [theme.value.primaryColor, '#00FFFF', '#FF4D00', '#00FF00', '#FFD700', '#FFFFFF']
+  const confettiCount = 50 // Increased count for preview
+
+  // Clear existing confetti
+  container.innerHTML = ''
+
+  for (let i = 0; i < confettiCount; i++) {
+    const confetti = document.createElement('div')
+    confetti.style.position = 'absolute'
+    confetti.style.width = `${Math.random() * 8 + 6}px`
+    confetti.style.height = `${Math.random() * 8 + 6}px`
+    confetti.style.backgroundColor = colors[Math.floor(Math.random() * colors.length)]
+    confetti.style.left = `${Math.random() * 100}%`
+    // 从容器顶部上方开始，形成连续飘落
+    confetti.style.top = `${Math.random() * -20}%` 
+    confetti.style.opacity = '0.8'
+    confetti.style.transform = `rotate(${Math.random() * 360}deg)`
+    confetti.style.animation = `preview-confetti-fall ${Math.random() * 3 + 3}s linear infinite`
+    confetti.style.animationDelay = `${Math.random() * 3}s`
+    confetti.style.pointerEvents = 'none'
+    container.appendChild(confetti)
+  }
+}
+
+const initPreviewEmojiFalling = () => {
+  const container = document.getElementById('preview-emoji-container')
+  if (!container) return
+
+  const emojis = ['🎉', '✨', '🎊', '🌟', '💫', '⭐', '🎈', '🎁', '🎀', '💖']
+  const emojiCount = 25 // Increased count for preview
+
+  // Clear existing emojis
+  container.innerHTML = ''
+
+  for (let i = 0; i < emojiCount; i++) {
+    const emoji = document.createElement('div')
+    emoji.textContent = emojis[Math.floor(Math.random() * emojis.length)]
+    emoji.style.position = 'absolute'
+    emoji.style.fontSize = `${Math.random() * 15 + 20}px`
+    emoji.style.left = `${Math.random() * 100}%`
+    // 从容器顶部上方开始
+    emoji.style.top = `${Math.random() * -20}%`
+    emoji.style.opacity = '0.7'
+    const randomX = (Math.random() - 0.5) * 2
+    emoji.style.setProperty('--random-x', String(randomX))
+    emoji.style.animation = `preview-emoji-fall ${Math.random() * 5 + 4}s linear infinite`
+    emoji.style.animationDelay = `${Math.random() * 4}s`
+    emoji.style.pointerEvents = 'none'
+    container.appendChild(emoji)
+  }
+}
+
+const initPreviewEffects = () => {
+  nextTick(() => {
+    if (theme.value.effects.includes('confetti')) {
+      initPreviewConfetti()
+    }
+    if (theme.value.effects.includes('emoji')) {
+      initPreviewEmojiFalling()
+    }
+  })
+}
+
+// 监听特效变化，实时更新预览
+watch(() => theme.value.effects, () => {
+  initPreviewEffects()
+}, { deep: true })
+
 onMounted(async () => {
   if (isEditMode.value && props.eventId) {
     loading.value = true
@@ -218,6 +291,7 @@ onMounted(async () => {
       // Privacy
       privacy.value.showGuestList = event.show_guest_list
       privacy.value.approvalRequired = event.approval_required || false
+      privacy.value.isPublic = event.is_public !== undefined ? event.is_public : true
       // Assuming it might be missing or stored in modules/theme? 
       // Whatever, ignore for now or add to schema later.
       
@@ -229,6 +303,9 @@ onMounted(async () => {
       loading.value = false
     }
   }
+  
+  // 初始化预览特效
+  initPreviewEffects()
 })
 
 // Helper for local ISO string
@@ -240,7 +317,8 @@ function toLocalISOString(date: Date) {
 
 const privacy = ref({
   approvalRequired: false,
-  showGuestList: true
+  showGuestList: true,
+  isPublic: true // 默认公开
 })
 
 const loading = ref(false)
@@ -355,7 +433,8 @@ const handleSave = async () => {
       },
       max_capacity: maxCapacity.value || null,
       show_guest_list: privacy.value.showGuestList,
-      approval_required: privacy.value.approvalRequired || false
+      approval_required: privacy.value.approvalRequired || false,
+      is_public: privacy.value.isPublic !== undefined ? privacy.value.isPublic : true
     }
 
     let savedEventId = ''
@@ -1113,6 +1192,14 @@ const handleSave = async () => {
                   <div class="space-y-3">
                     <label class="flex items-center gap-3 cursor-pointer">
                       <input
+                        v-model="privacy.isPublic"
+                        type="checkbox"
+                        class="w-6 h-6 border-4 border-white bg-black text-coral-pink focus:ring-coral-pink"
+                      />
+                      <span class="font-bold uppercase text-sm tracking-wider">Public Event (Anyone can access via link)</span>
+                    </label>
+                    <label class="flex items-center gap-3 cursor-pointer">
+                      <input
                         v-model="privacy.showGuestList"
                         type="checkbox"
                         class="w-6 h-6 border-4 border-white bg-black text-coral-pink focus:ring-coral-pink"
@@ -1127,6 +1214,11 @@ const handleSave = async () => {
                       />
                       <span class="font-bold uppercase text-sm tracking-wider">Require Approval for RSVP</span>
                     </label>
+                  </div>
+                  <div v-if="!privacy.isPublic" class="mt-3 p-3 bg-yellow-500/10 border-2 border-yellow-500/50 rounded">
+                    <p class="text-xs font-mono opacity-80">
+                      Private events can only be accessed by the creator or users with an invite card.
+                    </p>
                   </div>
                 </div>
               </div>
@@ -1179,22 +1271,24 @@ const handleSave = async () => {
                 </div>
               </div>
 
-              <!-- 手机屏幕 -->
-              <div class="aspect-[9/19] bg-white rounded-3xl overflow-hidden relative shadow-2xl transition-all duration-500"
-                   :style="{ 
-                     backgroundColor: theme.bgColor, 
-                     color: theme.primaryColor,
-                     fontFamily: theme.font
-                   }">
-                
-                <!-- 动态背景特效 -->
-                <div v-if="theme.preset === 'retro-paper'" class="absolute inset-0 opacity-10 pointer-events-none mix-blend-multiply"
-                     style="background-image: url('https://www.transparenttextures.com/patterns/cream-paper.png');"></div>
-                <div v-if="theme.preset === 'y2k-glitch'" class="absolute inset-0 opacity-10 pointer-events-none"
-                     style="background-image: repeating-linear-gradient(0deg, transparent, transparent 2px, #00ff00 2px, #00ff00 4px);"></div>
-                
-                <!-- 内容区域 -->
-                <div class="h-full overflow-y-auto p-6 scrollbar-hide">
+              <!-- 手机屏幕容器（包含特效容器） -->
+              <div class="relative">
+                <!-- 手机屏幕 -->
+                <div id="preview-phone-screen" class="aspect-[9/19] bg-white rounded-3xl overflow-hidden relative shadow-2xl transition-all duration-500"
+                     :style="{ 
+                       backgroundColor: theme.bgColor, 
+                       color: theme.primaryColor,
+                       fontFamily: theme.font
+                     }">
+                  
+                  <!-- 动态背景特效 -->
+                  <div v-if="theme.preset === 'retro-paper'" class="absolute inset-0 opacity-10 pointer-events-none mix-blend-multiply z-0"
+                       style="background-image: url('https://www.transparenttextures.com/patterns/cream-paper.png');"></div>
+                  <div v-if="theme.preset === 'y2k-glitch'" class="absolute inset-0 opacity-10 pointer-events-none z-0"
+                       style="background-image: repeating-linear-gradient(0deg, transparent, transparent 2px, #00ff00 2px, #00ff00 4px);"></div>
+                  
+                  <!-- 内容区域 -->
+                  <div class="h-full overflow-y-auto p-6 scrollbar-hide relative z-[1]">
                   <div class="min-h-full flex flex-col items-center justify-center text-center">
                     
                     <!-- 标题 -->
@@ -1253,8 +1347,15 @@ const handleSave = async () => {
                   </div>
                 </div>
 
-                <!-- 底部条 -->
-                <div class="absolute bottom-4 left-1/2 -translate-x-1/2 w-1/3 h-1 bg-current rounded-full opacity-20"></div>
+                  <!-- 底部条 -->
+                  <div class="absolute bottom-4 left-1/2 -translate-x-1/2 w-1/3 h-1 bg-current rounded-full opacity-20 z-[2]"></div>
+                  
+                  <!-- Confetti Effect Container (放在手机屏幕内，但在内容之上) -->
+                  <div v-if="theme.effects.includes('confetti')" id="preview-confetti-container" class="absolute inset-0 pointer-events-none" style="z-index: 100;"></div>
+                  
+                  <!-- Emoji Falling Effect Container (放在手机屏幕内，但在内容之上) -->
+                  <div v-if="theme.effects.includes('emoji')" id="preview-emoji-container" class="absolute inset-0 pointer-events-none" style="z-index: 100;"></div>
+                </div>
               </div>
             </div>
           </div>
@@ -1358,6 +1459,49 @@ const handleSave = async () => {
                 <span class="font-bold">Dark</span>
               </button>
             </div>
+            
+            <!-- Effects Selection -->
+            <div class="mt-6 pt-6 border-t border-white/10">
+              <div class="text-xs font-bold uppercase tracking-widest opacity-50 mb-4">Special Effects</div>
+              <div class="space-y-2">
+                <label class="flex items-center gap-3 p-3 rounded-lg border-2 cursor-pointer transition-all hover:bg-white/5"
+                       :class="theme.effects.includes('confetti') ? 'border-coral-pink bg-white/10' : 'border-white/10'">
+                  <input
+                    type="checkbox"
+                    :checked="theme.effects.includes('confetti')"
+                    @change="(e: any) => {
+                      if (e.target.checked) {
+                        if (!theme.effects.includes('confetti')) theme.effects.push('confetti')
+                      } else {
+                        theme.effects = theme.effects.filter((ef: string) => ef !== 'confetti')
+                      }
+                      initPreviewEffects()
+                    }"
+                    class="w-4 h-4"
+                  />
+                  <span class="iconify text-xl" data-icon="material-symbols:celebration"></span>
+                  <span class="flex-1 font-bold uppercase text-sm">Confetti</span>
+                </label>
+                <label class="flex items-center gap-3 p-3 rounded-lg border-2 cursor-pointer transition-all hover:bg-white/5"
+                       :class="theme.effects.includes('emoji') ? 'border-coral-pink bg-white/10' : 'border-white/10'">
+                  <input
+                    type="checkbox"
+                    :checked="theme.effects.includes('emoji')"
+                    @change="(e: any) => {
+                      if (e.target.checked) {
+                        if (!theme.effects.includes('emoji')) theme.effects.push('emoji')
+                      } else {
+                        theme.effects = theme.effects.filter((ef: string) => ef !== 'emoji')
+                      }
+                      initPreviewEffects()
+                    }"
+                    class="w-4 h-4"
+                  />
+                  <span class="text-xl">🎉</span>
+                  <span class="flex-1 font-bold uppercase text-sm">Emoji Falling</span>
+                </label>
+              </div>
+            </div>
           </div>
 
         </div>
@@ -1412,4 +1556,35 @@ const handleSave = async () => {
     </div>
   </div>
 </template>
+
+<style scoped>
+</style>
+
+<style>
+/* Global animation definitions for dynamic elements */
+@keyframes preview-confetti-fall {
+  0% {
+    transform: translateY(0) rotate(0deg);
+    opacity: 1;
+  }
+  100% {
+    transform: translateY(calc(100% + 50px)) rotate(720deg);
+    opacity: 0;
+  }
+}
+
+@keyframes preview-emoji-fall {
+  0% {
+    transform: translateY(0) translateX(0) rotate(0deg);
+    opacity: 0.7;
+  }
+  50% {
+    transform: translateY(50%) translateX(calc(var(--random-x, 0) * 30px)) rotate(180deg);
+  }
+  100% {
+    transform: translateY(calc(100% + 50px)) translateX(calc(var(--random-x, 0) * 60px)) rotate(360deg);
+    opacity: 0;
+  }
+}
+</style>
 

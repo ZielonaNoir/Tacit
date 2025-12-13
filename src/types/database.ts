@@ -52,6 +52,7 @@ export interface TacitEvent {
   max_capacity: number | null
   show_guest_list: boolean
   approval_required?: boolean
+  is_public?: boolean // 是否公开，默认 true
   created_at: string
 }
 

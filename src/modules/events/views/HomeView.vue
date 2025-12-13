@@ -3,28 +3,170 @@ import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/composables/useAuth'
+import { useGuestIdentity } from '@/composables/useGuestIdentity'
 import type { TacitEvent } from '@/types/database'
 
 const router = useRouter()
 const { user, isAuthenticated, signOut } = useAuth()
+const { guestId } = useGuestIdentity()
 const events = ref<TacitEvent[]>([])
 const loading = ref(true)
 
 onMounted(async () => {
   try {
-    const { data, error } = await supabase
-      .from('events')
-      .select('*')
-      .order('created_at', { ascending: false })
-      .limit(20)
+    if (isAuthenticated.value && user.value) {
+      // Logged in user: show events they created AND events they've been invited to
+      const eventIds = new Set<string>()
+      console.log('[HomeView] Logged in user:', user.value.id)
 
-    if (error) {
-      console.error('Supabase error:', error)
-      throw error
+      // 1. Events they created
+      const { data: createdEvents, error: createdError } = await supabase
+        .from('events')
+        .select('id')
+        .eq('creator_id', user.value.id)
+
+      if (createdError) {
+        console.error('[HomeView] Error fetching created events:', createdError)
+        throw createdError
+      }
+
+      console.log('[HomeView] Created events:', createdEvents?.length || 0, createdEvents)
+      if (createdEvents) {
+        createdEvents.forEach(event => eventIds.add(event.id))
+      }
+
+      // 2. Events through invite cards (check all statuses, not just opened/responded)
+      console.log('[HomeView] Querying invite cards for user_id:', user.value.id)
+      const { data: inviteCards, error: inviteError } = await supabase
+        .from('invite_cards')
+        .select('event_id, status, user_id')
+        .eq('user_id', user.value.id)
+
+      if (inviteError) {
+        console.error('[HomeView] Error fetching invite cards:', inviteError)
+        // Don't throw, just log
+      } else {
+        console.log('[HomeView] Invite cards found:', inviteCards?.length || 0, inviteCards)
+        if (inviteCards) {
+          inviteCards.forEach(card => {
+            console.log('[HomeView] Adding event from invite card:', card.event_id, 'status:', card.status)
+            eventIds.add(card.event_id)
+          })
+        }
+      }
+
+      // 3. Events through RSVPs (in case invite card user_id wasn't set)
+      const { data: rsvps, error: rsvpError } = await supabase
+        .from('rsvps')
+        .select('event_id')
+        .eq('user_id', user.value.id)
+
+      if (rsvpError) {
+        console.error('[HomeView] Error fetching RSVPs:', rsvpError)
+        // Don't throw, just log
+      } else {
+        console.log('[HomeView] RSVPs found:', rsvps?.length || 0, rsvps)
+        if (rsvps) {
+          rsvps.forEach(rsvp => {
+            console.log('[HomeView] Adding event from RSVP:', rsvp.event_id)
+            eventIds.add(rsvp.event_id)
+          })
+        }
+      }
+
+      console.log('[HomeView] Total unique event IDs:', eventIds.size, Array.from(eventIds))
+
+      if (eventIds.size === 0) {
+        events.value = []
+        console.log('[HomeView] No events found for logged-in user')
+      } else {
+        // Fetch all events
+        const { data, error } = await supabase
+          .from('events')
+          .select('*')
+          .in('id', Array.from(eventIds))
+          .order('created_at', { ascending: false })
+          .limit(20)
+
+        if (error) {
+          console.error('[HomeView] Supabase error fetching events:', error)
+          throw error
+        }
+        
+        console.log('[HomeView] Fetched events:', data?.length || 0, data)
+        events.value = data || []
+        console.log(`[HomeView] Loaded ${events.value.length} events for logged-in user`)
+      }
+    } else {
+      // Guest user: only show events where they have accepted invite cards
+      // Find events through:
+      // 1. Invite cards with this guest_id (check all statuses)
+      // 2. RSVPs with this guest_id (indicates they've interacted with the event)
+      const eventIds = new Set<string>()
+      console.log('[HomeView] Guest user ID:', guestId.value)
+
+      // First, find all invite cards for this guest (check all statuses)
+      const { data: inviteCards, error: inviteError } = await supabase
+        .from('invite_cards')
+        .select('event_id, status, guest_id')
+        .eq('guest_id', guestId.value)
+
+      if (inviteError) {
+        console.error('[HomeView] Error fetching invite cards:', inviteError)
+        throw inviteError
+      }
+
+      console.log('[HomeView] Invite cards found for guest:', inviteCards?.length || 0, inviteCards)
+      if (inviteCards) {
+        inviteCards.forEach(card => {
+          console.log('[HomeView] Adding event from invite card:', card.event_id, 'status:', card.status)
+          eventIds.add(card.event_id)
+        })
+      }
+
+      // Also find events through RSVPs (guest may have RSVP'd even if invite card status isn't updated)
+      const { data: rsvps, error: rsvpError } = await supabase
+        .from('rsvps')
+        .select('event_id')
+        .eq('guest_id', guestId.value)
+
+      if (rsvpError) {
+        console.error('[HomeView] Error fetching RSVPs:', rsvpError)
+        // Don't throw, just log - RSVPs are optional
+      } else {
+        console.log('[HomeView] RSVPs found for guest:', rsvps?.length || 0, rsvps)
+        if (rsvps) {
+          rsvps.forEach(rsvp => {
+            console.log('[HomeView] Adding event from RSVP:', rsvp.event_id)
+            eventIds.add(rsvp.event_id)
+          })
+        }
+      }
+
+      console.log('[HomeView] Total unique event IDs for guest:', eventIds.size, Array.from(eventIds))
+
+      if (eventIds.size === 0) {
+        events.value = []
+        console.log('[HomeView] No invite cards or RSVPs found for guest')
+      } else {
+        // Fetch events for these IDs
+        const { data, error } = await supabase
+          .from('events')
+          .select('*')
+          .in('id', Array.from(eventIds))
+          .order('created_at', { ascending: false })
+          .limit(20)
+
+        if (error) {
+          console.error('[HomeView] Supabase error fetching events:', error)
+          throw error
+        }
+        
+        console.log('[HomeView] Fetched events for guest:', data?.length || 0, data)
+        events.value = data || []
+        console.log(`[HomeView] Loaded ${events.value.length} events for guest`)
+      }
     }
-    
-    events.value = data || []
-    console.log(`Loaded ${events.value.length} events`)
   } catch (err) {
     console.error('Error fetching events:', err)
     // Show error to user

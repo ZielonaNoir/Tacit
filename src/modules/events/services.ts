@@ -1,7 +1,32 @@
 import { supabase } from '@/lib/supabase'
 import type { TacitEvent, EventTimePoll, EventPollVote, RSVP } from '@/types/database'
 
-export async function fetchEvent(id: string) {
+export async function fetchEvent(id: string, inviteCode?: string) {
+  // If invite code is provided, use RPC function to bypass RLS for private events
+  if (inviteCode) {
+    const { data, error } = await supabase
+      .rpc('get_event_by_invite_code', { invite_code_param: inviteCode })
+    
+    if (error) {
+      console.error('[fetchEvent] RPC error:', error)
+      throw error
+    }
+    
+    // RPC function returns a table, so we need to get the first row
+    if (!data || data.length === 0) {
+      throw new Error('Event not found or invalid invite code')
+    }
+    
+    // Verify the event ID matches
+    const event = data[0] as TacitEvent
+    if (event.id !== id) {
+      throw new Error('Invite code does not match event ID')
+    }
+    
+    return event
+  }
+  
+  // Normal fetch (subject to RLS)
   const { data, error } = await supabase
     .from('events')
     .select('*')

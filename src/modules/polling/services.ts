@@ -3,87 +3,117 @@ import type { InviteCard, Notification, UserAvailability, AvailabilitySlot, Free
 
 /**
  * 计算多个参与者的空闲时间窗口（重叠时间）
+ * 
+ * 算法说明：
+ * 1. 收集所有参与者的所有时间段
+ * 2. 只考虑有有效 RSVP（going/maybe）的参与者
+ * 3. 计算所有参与者的时间段的交集（所有参与者都可用）
+ * 4. 对于重叠的时间段，真正的结束时间是所有重叠时间段中最小的结束时间
  */
 export function calculateFreeTimeWindows(
-  availabilities: UserAvailability[]
+  availabilities: UserAvailability[],
+  validRSVPs?: Array<{ user_id: string | null; guest_id: string | null }>
 ): FreeTimeWindow[] {
   if (availabilities.length === 0) return []
 
-  // 收集所有时间槽
-  const allSlots: Array<{ start: Date; end: Date; participantId: string }> = []
-  
-  availabilities.forEach(avail => {
-    const participantId = avail.user_id || avail.guest_id || ''
-    avail.available_slots.forEach(slot => {
-      allSlots.push({
-        start: new Date(slot.start),
-        end: new Date(slot.end),
-        participantId
-      })
+  // 如果有 RSVP 列表，过滤掉没有有效 RSVP 的参与者
+  let filteredAvailabilities = availabilities
+  if (validRSVPs && validRSVPs.length > 0) {
+    const validIds = new Set<string>()
+    validRSVPs.forEach(rsvp => {
+      if (rsvp.user_id) validIds.add(`user:${rsvp.user_id}`)
+      if (rsvp.guest_id) validIds.add(`guest:${rsvp.guest_id}`)
     })
+    
+    filteredAvailabilities = availabilities.filter(avail => {
+      const id = avail.user_id ? `user:${avail.user_id}` : `guest:${avail.guest_id}`
+      return validIds.has(id)
+    })
+  }
+
+  if (filteredAvailabilities.length === 0) return []
+
+  // 收集每个参与者的时间段
+  const participantSlots: Array<Array<{ start: Date; end: Date; participantId: string }>> = []
+  
+  filteredAvailabilities.forEach(avail => {
+    const participantId = avail.user_id || avail.guest_id || ''
+    const slots = avail.available_slots.map(slot => ({
+      start: new Date(slot.start),
+      end: new Date(slot.end),
+      participantId
+    }))
+    if (slots.length > 0) {
+      participantSlots.push(slots)
+    }
   })
 
-  if (allSlots.length === 0) return []
+  if (participantSlots.length === 0) return []
 
-  // 找到所有时间的开始和结束范围
-  const allStarts = allSlots.map(s => s.start.getTime())
-  const allEnds = allSlots.map(s => s.end.getTime())
-  const minStart = Math.min(...allStarts)
-  const maxEnd = Math.max(...allEnds)
+  // 从第一个参与者开始，逐步计算与后续参与者的交集
+  let result: Array<{ start: Date; end: Date; participants: string[] }> = participantSlots[0].map(slot => ({
+    start: slot.start,
+    end: slot.end,
+    participants: [slot.participantId]
+  }))
 
-  // 按分钟切片检查重叠
-  const windows: FreeTimeWindow[] = []
-  const stepMinutes = 30 // 30分钟为粒度
-  const stepMs = stepMinutes * 60 * 1000
-
-  let currentStart = minStart
-  while (currentStart < maxEnd) {
-    const currentEnd = currentStart + stepMs
-    const windowStart = new Date(currentStart)
-    const windowEnd = new Date(currentEnd)
-
-    // 检查这个时间窗口内有哪些参与者可用
-    const availableParticipants = new Set<string>()
+  // 依次与每个参与者的时间段求交集
+  for (let i = 1; i < participantSlots.length; i++) {
+    const newResult: Array<{ start: Date; end: Date; participants: string[] }> = []
     
-    availabilities.forEach(avail => {
-      const participantId = avail.user_id || avail.guest_id || ''
-      const isAvailable = avail.available_slots.some(slot => {
-        const slotStart = new Date(slot.start)
-        const slotEnd = new Date(slot.end)
-        // 检查时间窗口是否与这个槽重叠
-        return windowStart < slotEnd && windowEnd > slotStart
-      })
-      
-      if (isAvailable) {
-        availableParticipants.add(participantId)
-      }
-    })
+    for (const existing of result) {
+      for (const slot of participantSlots[i]) {
+        const overlapStart = new Date(Math.max(existing.start.getTime(), slot.start.getTime()))
+        const overlapEnd = new Date(Math.min(existing.end.getTime(), slot.end.getTime()))
 
-    // 如果所有参与者都可用，记录这个窗口
-    if (availableParticipants.size === availabilities.length && availableParticipants.size > 0) {
-      // 尝试合并相邻的窗口
-      const lastWindow = windows[windows.length - 1]
-      if (lastWindow && 
-          new Date(lastWindow.end).getTime() === currentStart &&
-          lastWindow.participants.length === availableParticipants.size &&
-          [...lastWindow.participants].every(p => availableParticipants.has(p))) {
-        // 合并窗口
-        lastWindow.end = windowEnd.toISOString()
-      } else {
-        // 创建新窗口
-        windows.push({
-          start: windowStart.toISOString(),
-          end: windowEnd.toISOString(),
-          participants: Array.from(availableParticipants),
-          participant_count: availableParticipants.size
-        })
+        if (overlapStart < overlapEnd) {
+          newResult.push({
+            start: overlapStart,
+            end: overlapEnd,
+            participants: [...existing.participants, slot.participantId]
+          })
+        }
+      }
+    }
+    
+    result = newResult
+  }
+
+  // 合并相邻或重叠的窗口（相同的参与者集合）
+  const merged: FreeTimeWindow[] = []
+  const sortedResult = result.sort((a, b) => a.start.getTime() - b.start.getTime())
+
+  for (const window of sortedResult) {
+    // 检查是否与最后一个窗口可以合并
+    if (merged.length > 0) {
+      const lastWindow = merged[merged.length - 1]
+      const lastEnd = new Date(lastWindow.end).getTime()
+      const currentStart = window.start.getTime()
+      
+      // 如果参与者相同且时间相邻或重叠，则合并
+      const sameParticipants = 
+        lastWindow.participants.length === window.participants.length &&
+        lastWindow.participants.every(p => window.participants.includes(p)) &&
+        window.participants.every(p => lastWindow.participants.includes(p))
+      
+      if (sameParticipants && currentStart <= lastEnd + 1000) { // 允许1秒的间隙，视为连续
+        // 合并：取较大的结束时间（扩展窗口）
+        const currentEnd = window.end.getTime()
+        lastWindow.end = new Date(Math.max(lastEnd, currentEnd)).toISOString()
+        continue
       }
     }
 
-    currentStart = currentEnd
+    // 创建新窗口
+    merged.push({
+      start: window.start.toISOString(),
+      end: window.end.toISOString(),
+      participants: window.participants,
+      participant_count: window.participants.length
+    })
   }
 
-  return windows
+  return merged
 }
 
 /**

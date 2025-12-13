@@ -45,6 +45,39 @@ const themeStyle = computed(() => {
   }
 })
 
+// Helper function to check if a color is dark
+const isDarkColor = (color: string): boolean => {
+  if (!color) return false
+  // Remove # if present
+  const hex = color.replace('#', '')
+  if (hex.length === 3) {
+    // Expand shorthand hex
+    const r = parseInt(hex[0] + hex[0], 16)
+    const g = parseInt(hex[1] + hex[1], 16)
+    const b = parseInt(hex[2] + hex[2], 16)
+    // Calculate luminance
+    const luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255
+    return luminance < 0.5
+  } else if (hex.length === 6) {
+    const r = parseInt(hex.substring(0, 2), 16)
+    const g = parseInt(hex.substring(2, 4), 16)
+    const b = parseInt(hex.substring(4, 6), 16)
+    // Calculate luminance
+    const luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255
+    return luminance < 0.5
+  }
+  // For rgb() format, try to parse
+  const rgbMatch = color.match(/rgb\((\d+),\s*(\d+),\s*(\d+)\)/)
+  if (rgbMatch) {
+    const r = parseInt(rgbMatch[1])
+    const g = parseInt(rgbMatch[2])
+    const b = parseInt(rgbMatch[3])
+    const luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255
+    return luminance < 0.5
+  }
+  return false
+}
+
 // Check if user is logged in or has guest name
 const isIdentified = computed(() => {
   return !!user.value || isGuestSetup.value
@@ -59,7 +92,7 @@ const displayName = computed(() => {
 
 onMounted(async () => {
   try {
-    // Load invite card
+    // Load invite card first
     const card = await fetchInviteCardByCode(inviteCode)
     if (!card) {
       error.value = 'Invalid invite code'
@@ -73,19 +106,40 @@ onMounted(async () => {
 
     inviteCard.value = card
 
-    // Load event
-    const eventData = await fetchEvent(eventId)
+    // Load event - use invite code to bypass RLS for private events
+    const eventData = await fetchEvent(eventId, inviteCode)
     event.value = eventData
 
-    // Mark invite card as opened if not already
+    // Always ensure user_id/guest_id is set, and mark as opened if needed
+    const identity = await getIdentityPayloadSafe(user.value?.id)
+    const updateData: any = {}
+    
+    // Update status if needed
     if (card.status === 'pending' || card.status === 'sent') {
-      await supabase
+      updateData.status = 'opened'
+      updateData.opened_at = new Date().toISOString()
+    }
+    
+    // Always update user_id/guest_id if they're missing
+    if (!card.user_id && identity.user_id) {
+      updateData.user_id = identity.user_id
+    }
+    if (!card.guest_id && identity.guest_id) {
+      updateData.guest_id = identity.guest_id
+    }
+    
+    // Only update if there's something to update
+    if (Object.keys(updateData).length > 0) {
+      const { error: updateError } = await supabase
         .from('invite_cards')
-        .update({
-          status: 'opened',
-          opened_at: new Date().toISOString()
-        })
+        .update(updateData)
         .eq('id', card.id)
+      
+      if (updateError) {
+        console.error('[InviteCardView] Failed to update invite card:', updateError)
+      } else {
+        console.log('[InviteCardView] Updated invite card:', updateData)
+      }
     }
 
     // Check if user is logged in
@@ -245,7 +299,13 @@ const formatTime = (dateString: string | null) => {
 
     <!-- Invite Card -->
     <div v-else-if="event && inviteCard" class="w-full max-w-2xl">
-      <div class="border-4 border-current bg-black/50 p-8 md:p-12 relative">
+      <div 
+        class="border-4 border-current p-8 md:p-12 relative"
+        :style="{ 
+          backgroundColor: themeStyle.bgColor === '#000000' ? 'rgba(0, 0, 0, 0.9)' : `${themeStyle.bgColor}E6`,
+          borderColor: themeStyle.color
+        }"
+      >
         <!-- Corner decorations -->
         <div class="absolute -top-1 -left-1 w-4 h-4 border-t-4 border-l-4 border-current"></div>
         <div class="absolute -top-1 -right-1 w-4 h-4 border-t-4 border-r-4 border-current"></div>
@@ -294,14 +354,24 @@ const formatTime = (dateString: string | null) => {
               v-model="guestNameInput"
               type="text"
               placeholder="Enter your name"
-              class="flex-1 px-4 py-3 bg-black/50 border-2 border-current text-current placeholder-current/50 focus:outline-none focus:ring-2 focus:ring-current font-bold"
+              class="flex-1 px-4 py-3 border-2 border-current text-current placeholder-current/50 focus:outline-none focus:ring-2 focus:ring-current font-bold"
+              :style="{ 
+                backgroundColor: themeStyle.bgColor === '#000000' ? 'rgba(0, 0, 0, 0.6)' : `${themeStyle.bgColor}99`,
+                borderColor: themeStyle.color
+              }"
               @keyup.enter="handleSetGuestName"
             />
             <button
               @click="handleSetGuestName"
-              class="px-6 py-3 border-2 border-current bg-current text-black font-bold uppercase hover:opacity-80 transition-opacity"
+              class="px-6 py-3 border-2 border-current font-bold uppercase hover:opacity-80 transition-opacity flex items-center justify-center gap-2"
+              :style="{ 
+                backgroundColor: themeStyle.color || '#FF8A95',
+                color: isDarkColor(themeStyle.color || '#FF8A95') ? '#FFFFFF' : '#000000',
+                borderColor: themeStyle.color || '#FF8A95'
+              }"
             >
-              Set
+              <span class="iconify text-lg" data-icon="material-symbols:send"></span>
+              <span>Set</span>
             </button>
           </div>
           <p class="text-xs mt-2 opacity-70 font-mono">This helps identify you in the guest list</p>
@@ -329,10 +399,17 @@ const formatTime = (dateString: string | null) => {
                 :class="[
                   'p-4 border-4 font-bold uppercase transition-all',
                   rsvpStatus === 'going'
-                    ? 'bg-current text-black border-current'
-                    : 'bg-transparent border-current hover:bg-current/20',
+                    ? 'text-black'
+                    : 'bg-transparent hover:bg-current/20',
                   (submitting || !isIdentified) && 'opacity-50 cursor-not-allowed'
                 ]"
+                :style="{
+                  backgroundColor: rsvpStatus === 'going' ? (themeStyle.color || '#FF8A95') : 'transparent',
+                  borderColor: themeStyle.color || '#FF8A95',
+                  color: rsvpStatus === 'going' 
+                    ? (isDarkColor(themeStyle.color || '#FF8A95') ? '#FFFFFF' : '#000000')
+                    : (themeStyle.color || '#FF8A95')
+                }"
               >
                 <iconify-icon icon="material-symbols:check-circle" class="text-2xl mb-1 block mx-auto" />
                 <div class="text-sm">Going</div>
@@ -343,10 +420,17 @@ const formatTime = (dateString: string | null) => {
                 :class="[
                   'p-4 border-4 font-bold uppercase transition-all',
                   rsvpStatus === 'maybe'
-                    ? 'bg-current text-black border-current'
-                    : 'bg-transparent border-current hover:bg-current/20',
+                    ? 'text-black'
+                    : 'bg-transparent hover:bg-current/20',
                   (submitting || !isIdentified) && 'opacity-50 cursor-not-allowed'
                 ]"
+                :style="{
+                  backgroundColor: rsvpStatus === 'maybe' ? (themeStyle.color || '#FF8A95') : 'transparent',
+                  borderColor: themeStyle.color || '#FF8A95',
+                  color: rsvpStatus === 'maybe'
+                    ? (isDarkColor(themeStyle.color || '#FF8A95') ? '#FFFFFF' : '#000000')
+                    : (themeStyle.color || '#FF8A95')
+                }"
               >
                 <iconify-icon icon="material-symbols:help" class="text-2xl mb-1 block mx-auto" />
                 <div class="text-sm">Maybe</div>
@@ -357,10 +441,17 @@ const formatTime = (dateString: string | null) => {
                 :class="[
                   'p-4 border-4 font-bold uppercase transition-all',
                   rsvpStatus === 'not_going'
-                    ? 'bg-current text-black border-current'
-                    : 'bg-transparent border-current hover:bg-current/20',
+                    ? 'text-black'
+                    : 'bg-transparent hover:bg-current/20',
                   (submitting || !isIdentified) && 'opacity-50 cursor-not-allowed'
                 ]"
+                :style="{
+                  backgroundColor: rsvpStatus === 'not_going' ? (themeStyle.color || '#FF8A95') : 'transparent',
+                  borderColor: themeStyle.color || '#FF8A95',
+                  color: rsvpStatus === 'not_going'
+                    ? (isDarkColor(themeStyle.color || '#FF8A95') ? '#FFFFFF' : '#000000')
+                    : (themeStyle.color || '#FF8A95')
+                }"
               >
                 <iconify-icon icon="material-symbols:close" class="text-2xl mb-1 block mx-auto" />
                 <div class="text-sm">Can't Go</div>
@@ -376,7 +467,11 @@ const formatTime = (dateString: string | null) => {
               type="number"
               min="1"
               max="10"
-              class="w-full px-4 py-3 bg-black/50 border-2 border-current text-current focus:outline-none focus:ring-2 focus:ring-current font-bold"
+              class="w-full px-4 py-3 border-2 border-current text-current focus:outline-none focus:ring-2 focus:ring-current font-bold"
+              :style="{ 
+                backgroundColor: themeStyle.bgColor === '#000000' ? 'rgba(0, 0, 0, 0.6)' : `${themeStyle.bgColor}99`,
+                borderColor: themeStyle.color
+              }"
             />
           </div>
 
@@ -387,7 +482,11 @@ const formatTime = (dateString: string | null) => {
               v-model="comment"
               rows="3"
               placeholder="Add a message..."
-              class="w-full px-4 py-3 bg-black/50 border-2 border-current text-current placeholder-current/50 focus:outline-none focus:ring-2 focus:ring-current font-bold resize-none"
+              class="w-full px-4 py-3 border-2 border-current text-current placeholder-current/50 focus:outline-none focus:ring-2 focus:ring-current font-bold resize-none"
+              :style="{ 
+                backgroundColor: themeStyle.bgColor === '#000000' ? 'rgba(0, 0, 0, 0.6)' : `${themeStyle.bgColor}99`,
+                borderColor: themeStyle.color
+              }"
             ></textarea>
           </div>
         </div>
@@ -395,7 +494,7 @@ const formatTime = (dateString: string | null) => {
         <!-- Footer -->
         <div class="mt-8 pt-6 border-t-2 border-current/30 text-center">
           <button
-            @click="router.push(`/events/${eventId}`)"
+            @click="router.push(`/events/${eventId}?invite=${inviteCode}`)"
             class="text-sm font-mono uppercase tracking-wider hover:underline opacity-70 hover:opacity-100 transition-opacity"
           >
             View Full Event →

@@ -120,6 +120,20 @@ const handleRemoveGuest = async (rsvpId: string) => {
 
   try {
     console.log('[GuestList] Removing RSVP:', rsvpId)
+    
+    // First, get the RSVP to find user_id/guest_id
+    const { data: rsvpData, error: fetchError } = await supabase
+      .from('rsvps')
+      .select('user_id, guest_id')
+      .eq('id', rsvpId)
+      .single()
+    
+    if (fetchError) {
+      console.error('[GuestList] Error fetching RSVP:', fetchError)
+      throw fetchError
+    }
+    
+    // Delete RSVP
     const { error, data } = await supabase
       .from('rsvps')
       .delete()
@@ -129,6 +143,28 @@ const handleRemoveGuest = async (rsvpId: string) => {
     if (error) {
       console.error('[GuestList] Delete error:', error)
       throw error
+    }
+    
+    // Also delete user_availability for this participant
+    if (rsvpData) {
+      let availabilityQuery = supabase
+        .from('user_availability')
+        .delete()
+        .eq('event_id', props.eventId)
+      
+      if (rsvpData.user_id) {
+        availabilityQuery = availabilityQuery.eq('user_id', rsvpData.user_id)
+      } else if (rsvpData.guest_id) {
+        availabilityQuery = availabilityQuery.eq('guest_id', rsvpData.guest_id)
+      }
+      
+      const { error: availabilityError } = await availabilityQuery
+      if (availabilityError) {
+        console.warn('[GuestList] Failed to delete user_availability:', availabilityError)
+        // Don't fail the whole operation if availability deletion fails
+      } else {
+        console.log('[GuestList] Successfully deleted user_availability for removed guest')
+      }
     }
     
     console.log('[GuestList] Successfully removed RSVP:', data)
@@ -152,6 +188,42 @@ const handleApprove = async (rsvpId: string) => {
   } catch (err) {
     console.error('Error approving RSVP:', err)
     alert('Failed to approve')
+  }
+}
+
+const editingGuestCount = ref<Record<string, number>>({})
+const isEditingGuestCount = ref<Record<string, boolean>>({})
+
+const startEditGuestCount = (rsvpId: string, currentCount: number) => {
+  editingGuestCount.value[rsvpId] = currentCount
+  isEditingGuestCount.value[rsvpId] = true
+}
+
+const cancelEditGuestCount = (rsvpId: string) => {
+  delete editingGuestCount.value[rsvpId]
+  delete isEditingGuestCount.value[rsvpId]
+}
+
+const handleUpdateGuestCount = async (rsvpId: string) => {
+  const newCount = editingGuestCount.value[rsvpId]
+  if (newCount === undefined || newCount < 0) {
+    alert('Invalid guest count')
+    return
+  }
+
+  try {
+    const { error } = await supabase
+      .from('rsvps')
+      .update({ guests_count: newCount })
+      .eq('id', rsvpId)
+
+    if (error) throw error
+    
+    cancelEditGuestCount(rsvpId)
+    emit('update')
+  } catch (err) {
+    console.error('Error updating guest count:', err)
+    alert('Failed to update guest count')
   }
 }
 </script>
@@ -210,8 +282,8 @@ const handleApprove = async (rsvpId: string) => {
         :key="status.key"
         @click="statusFilter = status.key as RSVPStatus | 'all'"
         class="px-3 py-1.5 rounded border-2 font-bold uppercase text-[10px] tracking-wider transition-all"
-        :class="statusFilter === status.key ? 'bg-current text-black border-black' : 'border-current/30 hover:bg-white/5'"
-        :style="statusFilter === status.key ? { backgroundColor: primaryColor || '#FF8A95' } : {}"
+        :class="statusFilter === status.key ? '' : 'border-black hover:bg-white/5'"
+        :style="statusFilter === status.key ? { backgroundColor: 'rgba(255, 255, 255, 1)', color: 'rgba(0, 0, 0, 1)', borderColor: 'rgba(5, 5, 5, 1)' } : {}"
       >
         {{ status.label }} <span class="opacity-70">({{ status.count }})</span>
       </button>
@@ -233,9 +305,41 @@ const handleApprove = async (rsvpId: string) => {
             {{ rsvp.user_id ? 'U' : 'G' }}
           </div>
           <div class="flex-1 min-w-0 pt-1">
-            <div class="font-bold text-sm truncate">
-              {{ rsvp.user_id ? 'User' : 'Guest' }}
-              <span v-if="rsvp.guests_count > 0" class="text-xs opacity-70 ml-1">+{{ rsvp.guests_count }}</span>
+            <div class="font-bold text-sm truncate flex items-center gap-2">
+              <span>{{ rsvp.user_id ? 'User' : 'Guest' }}</span>
+              <span v-if="!isEditingGuestCount[rsvp.id] && rsvp.guests_count > 0" class="text-xs opacity-70">+{{ rsvp.guests_count }}</span>
+              <!-- Host can edit +1s -->
+              <div v-if="isHost && isEditingGuestCount[rsvp.id]" class="flex items-center gap-1">
+                <input
+                  v-model.number="editingGuestCount[rsvp.id]"
+                  type="number"
+                  min="0"
+                  max="20"
+                  class="w-16 px-2 py-1 text-xs border-2 border-black bg-white text-black font-bold"
+                  @keyup.enter="handleUpdateGuestCount(rsvp.id)"
+                  @keyup.esc="cancelEditGuestCount(rsvp.id)"
+                />
+                <button
+                  @click="handleUpdateGuestCount(rsvp.id)"
+                  class="px-2 py-1 bg-green-500 text-black text-[10px] font-bold uppercase border border-black hover:brightness-110"
+                >
+                  ✓
+                </button>
+                <button
+                  @click="cancelEditGuestCount(rsvp.id)"
+                  class="px-2 py-1 bg-red-500 text-black text-[10px] font-bold uppercase border border-black hover:brightness-110"
+                >
+                  ×
+                </button>
+              </div>
+              <button
+                v-else-if="isHost"
+                @click="startEditGuestCount(rsvp.id, rsvp.guests_count)"
+                class="text-[10px] opacity-50 hover:opacity-100 transition-opacity"
+                title="Edit +1s"
+              >
+                [Edit +1s]
+              </button>
             </div>
             <!-- Display ID -->
             <div class="text-[10px] font-mono opacity-50 mt-1 break-all">
