@@ -41,7 +41,7 @@ const router = createRouter({
 })
 
 // 路由守卫
-router.beforeEach(async (to, from, next) => {
+router.beforeEach(async (to, _from, next) => {
   if (to.meta.requiresAuth) {
     const { data: { session } } = await supabase.auth.getSession()
     if (!session) {

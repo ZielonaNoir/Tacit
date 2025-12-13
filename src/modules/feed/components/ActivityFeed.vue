@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, computed } from 'vue'
+import { ref, onMounted } from 'vue'
 import { supabase } from '@/lib/supabase'
 import { fetchActivities, createActivity } from '../services'
 import { useAuth } from '@/composables/useAuth'
@@ -11,19 +11,18 @@ const props = defineProps<{
   isHost?: boolean
 }>()
 
-const { user, isAuthenticated } = useAuth()
-const { getIdentityPayload, guestName } = useGuestIdentity()
+const { user } = useAuth()
+const { getIdentityPayload } = useGuestIdentity()
 
 const activities = ref<Activity[]>([])
 const loading = ref(true)
 const newComment = ref('')
-const showPhotoUpload = ref(false)
 
 onMounted(async () => {
   await loadActivities()
   
   // Subscribe to real-time updates
-  const channel = supabase
+  supabase
     .channel(`activities:${props.eventId}`)
     .on('postgres_changes', {
       event: '*',
@@ -34,8 +33,6 @@ onMounted(async () => {
       loadActivities()
     })
     .subscribe()
-
-  // Cleanup on unmount would be nice, but Vue 3 Composition API handles it
 })
 
 const loadActivities = async () => {

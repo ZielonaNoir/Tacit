@@ -1,7 +1,6 @@
 import { useLocalStorage } from '@vueuse/core'
 import { v4 as uuidv4 } from 'uuid'
 import { computed } from 'vue'
-import type { GuestIdentity } from '@/types/database'
 import { supabase } from '@/lib/supabase'
 
 export interface GuestStore {

@@ -5,7 +5,10 @@
   "scripts": {
     "dev": "vite",
     "build": "vue-tsc && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "type-check": "vue-tsc --noEmit",
+    "lint": "vue-tsc --noEmit",
+    "precommit": "pnpm type-check"
   },
   "dependencies": {
     "vue": "^3.5.13",

@@ -34,14 +34,19 @@ export interface TacitEvent {
   location_url: string | null
   cover_image_url: string | null
   theme_config: {
+    preset?: string
     font?: string
     effect?: string
     primary_color?: string
     bg_color?: string
+    effects?: string[]
   }
   modules_config: {
-    spotify?: string
-    registry?: string
+    spotify?: { url: string } | null
+    gift_registry?: { items: string[] } | null
+    dress_code?: { text: string } | null
+    chip_in?: { amount: number; currency: string } | null
+    secret_address?: string | null
   }
   max_capacity: number | null
   show_guest_list: boolean

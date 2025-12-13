@@ -10,7 +10,7 @@ import type { PollVoteStatus } from '@/types/database'
 
 const route = useRoute()
 const { user, isAuthenticated } = useAuth()
-const { getIdentityPayload, guestName } = useGuestIdentity()
+const { getIdentityPayload } = useGuestIdentity()
 
 const isHost = computed(() => {
   return event.value && user.value && event.value.creator_id === user.value.id
@@ -175,7 +175,7 @@ const handleVote = async (pollId: string, status: PollVoteStatus) => {
         <h2 class="text-3xl font-heading font-bold mb-4">Event Details</h2>
         
         <!-- Spotify -->
-        <div v-if="event.modules_config.spotify?.url" class="border-4 border-black p-4">
+        <div v-if="event.modules_config.spotify && event.modules_config.spotify.url" class="border-4 border-black p-4">
           <h3 class="font-bold mb-2">🎵 Spotify Playlist</h3>
           <iframe
             :src="event.modules_config.spotify.url.replace('open.spotify.com', 'open.spotify.com/embed')"
@@ -210,7 +210,7 @@ const handleVote = async (pollId: string, status: PollVoteStatus) => {
       <!-- Activity Feed -->
       <div class="bg-white border-4 border-black shadow-retro p-6 mb-6">
         <h2 class="text-3xl font-heading font-bold mb-4">Activity Feed</h2>
-        <ActivityFeed :event-id="event.id" :is-host="isHost" />
+        <ActivityFeed :event-id="event.id" :is-host="!!isHost" />
       </div>
 
       <!-- Guest List -->

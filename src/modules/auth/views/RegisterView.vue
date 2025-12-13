@@ -6,7 +6,7 @@ import { supabase } from '@/lib/supabase'
 
 const router = useRouter()
 const route = useRoute()
-const { signUp, isAuthenticated } = useAuth()
+const { isAuthenticated } = useAuth()
 
 const email = ref('')
 const password = ref('')
