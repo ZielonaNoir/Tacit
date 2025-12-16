@@ -1,0 +1,8 @@
+# 备份文件
+backups/
+*.sql.backup
+*.dump
+
+# 环境变量文件（如果包含密码）
+.env.db
+

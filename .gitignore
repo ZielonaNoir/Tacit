@@ -27,3 +27,7 @@ dist-ssr
 .env.local
 .env.*.local
 
+# Supabase CLI local config
+database/supabase/
+.supabase/
+
