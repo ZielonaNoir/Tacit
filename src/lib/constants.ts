@@ -1,3 +1,3 @@
 export const APP_NAME = 'Tacit'
-export const APP_DESCRIPTION = '无摩擦的活动平台'
+export const APP_DESCRIPTION = '默契与你'
 
